@@ -91,7 +91,7 @@ impl HardwareDetector {
             PerformanceTier::Performance => InferenceProfile {
                 thread_count: physical_core_count,
                 batch_thread_count: logical_core_count,
-                context_size: 16384,
+                context_size: 8192,
                 max_tokens: 768,
                 max_active_sessions: 8,
             },

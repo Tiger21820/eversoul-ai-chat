@@ -10,6 +10,10 @@ export const tauriCommands = {
         getEverTalkSessionRoom: 'chat_get_evertalk_session_room',
         getLatestSessionRoom: 'chat_get_latest_session_room',
         listRooms: 'chat_list_rooms',
+        listRoomsForPersona: 'chat_list_rooms_for_persona',
+        startNewRoom: 'chat_start_new_room',
+        deleteRoom: 'chat_delete_room',
+        deleteMessage: 'chat_delete_message',
         listMessages: 'chat_list_messages',
         listMessagesForPersona: 'chat_list_messages_for_persona',
         preparePersonaCache: 'chat_prepare_persona_cache',
@@ -83,7 +87,6 @@ export const tauriCommands = {
     voice: {
         list: 'voice_list',
         get: 'voice_get',
-        synthesize: 'voice_synthesize',
     },
 } as const;
 type CommandGroup = (typeof tauriCommands)[keyof typeof tauriCommands];

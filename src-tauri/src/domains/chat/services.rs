@@ -8,9 +8,12 @@ use crate::domains::knowledge::services::KnowledgeService;
 use crate::domains::modules::services::ModuleService;
 use crate::domains::persona::services::PersonaService;
 use crate::domains::style::services::StyleService;
+use crate::infrastructure::i18n::pick;
 use crate::infrastructure::settings::SettingsManager;
 
 const EPISODIC_INJECT_LIMIT: usize = 5;
+
+const EPISODIC_SEARCH_CANDIDATE_LIMIT: usize = 200;
 
 const PROMPT_HISTORY_LIMIT: usize = 6;
 
@@ -23,6 +26,10 @@ const CONSOLIDATION_SOURCE_LIMIT: usize = 30;
 pub const CONSOLIDATION_MAX_TOKENS: u32 = 200;
 
 pub const EVERTALK_SESSION_TITLE: &str = "EverTalk Session";
+
+pub const CHAT_STREAM_TOKEN_EVENT: &str = "chat-stream-token";
+
+pub const CHAT_STREAM_DONE_EVENT: &str = "chat-stream-done";
 
 pub struct ChatService<'a> {
     conn: &'a Connection,
@@ -64,6 +71,33 @@ impl<'a> ChatService<'a> {
 
     pub fn get_chat_rooms(&self, language: &str) -> Result<Vec<ChatRoom>, ChatError> {
         ChatRepository::list_rooms(self.conn)
+            .map_err(|e| ChatError::database(language, &e.to_string()))
+    }
+
+    pub fn get_rooms_for_persona(
+        &self,
+        persona_id: &str,
+        language: &str,
+    ) -> Result<Vec<ChatRoom>, ChatError> {
+        ChatRepository::list_rooms_by_persona(self.conn, persona_id)
+            .map_err(|e| ChatError::database(language, &e.to_string()))
+    }
+
+    pub fn start_new_room(
+        &self,
+        persona_id: &str,
+        language: &str,
+    ) -> Result<ChatRoom, ChatError> {
+        self.create_chat_session_room(EVERTALK_SESSION_TITLE, Some(persona_id.to_string()), language)
+    }
+
+    pub fn delete_room(&self, room_id: &str, language: &str) -> Result<(), ChatError> {
+        ChatRepository::delete_room(self.conn, room_id)
+            .map_err(|e| ChatError::database(language, &e.to_string()))
+    }
+
+    pub fn delete_message(&self, message_id: &str, language: &str) -> Result<(), ChatError> {
+        ChatRepository::delete_message(self.conn, message_id)
             .map_err(|e| ChatError::database(language, &e.to_string()))
     }
 
@@ -113,6 +147,7 @@ impl<'a> ChatService<'a> {
         &self,
         req: &SendMessageRequest,
         settings: &SettingsManager,
+        memory_query_vector: &[f32],
     ) -> Result<(String, Vec<ChatMessage>), ChatError> {
         let language = settings.get_language();
         let now = SystemTime::now()
@@ -141,8 +176,43 @@ impl<'a> ChatService<'a> {
         )
         .map_err(|e| ChatError::database(&language, &e.to_string()))?;
 
-        // KV 캐시 파괴 방지: 지식 검색 결과는 시스템 프롬프트(고정)가 아닌 가장 최신 컨텍스트(history 직전)에 삽입
         let mut final_history = history.clone();
+
+        let recalled_memories = ChatRepository::search_episodic_memories(
+            self.conn,
+            &req.persona_id,
+            memory_query_vector,
+            EPISODIC_INJECT_LIMIT,
+            EPISODIC_SEARCH_CANDIDATE_LIMIT,
+        )
+        .map_err(|e| ChatError::database(&language, &e.to_string()))?;
+
+        if !recalled_memories.is_empty() {
+            let mut memory_context = pick(
+                &language,
+                "[구원자와의 과거 대화 중 지금 대화와 관련된 기억]\n".to_string(),
+                "[Memories related to the current conversation from past talks with the Savior]\n"
+                    .to_string(),
+                "[与当前对话相关的、与救世主过去对话中的记忆]\n".to_string(),
+            );
+            for (index, note) in recalled_memories.iter().enumerate() {
+                memory_context.push_str(&format!("{}. {}\n", index + 1, note));
+            }
+
+            let injection_index = final_history.len().saturating_sub(1);
+            final_history.insert(
+                injection_index,
+                ChatMessage {
+                    id: "system_memory_recall".to_string(),
+                    room_id: req.room_id.clone(),
+                    persona_id: Some(req.persona_id.clone()),
+                    role: "system".to_string(),
+                    content: memory_context,
+                    created_at: now.clone(),
+                },
+            );
+        }
+
         let knowledge_service = KnowledgeService::new(self.conn);
         if let Ok(chunks) = knowledge_service.query_knowledge(&req.content, Some(2)) {
             if !chunks.is_empty() {
@@ -152,7 +222,8 @@ impl<'a> ChatService<'a> {
                 }
                 knowledge_context.push_str("위 지식을 바탕으로 자연스럽게 대답할 것.");
                 
-                final_history.insert(0, ChatMessage {
+                let injection_index = final_history.len().saturating_sub(1);
+                final_history.insert(injection_index, ChatMessage {
                     id: "system_knowledge_injection".to_string(),
                     room_id: req.room_id.clone(),
                     persona_id: Some(req.persona_id.clone()),
@@ -193,39 +264,54 @@ impl<'a> ChatService<'a> {
 
         let semantic_memory = ChatRepository::get_semantic_memory(self.conn, persona_id)
             .map_err(|e| ChatError::database(&language, &e.to_string()))?;
-        let recent_episodic =
-            ChatRepository::list_episodic_memories(self.conn, persona_id, EPISODIC_INJECT_LIMIT)
-                .map_err(|e| ChatError::database(&language, &e.to_string()))?;
 
-        if semantic_memory.is_some() || !recent_episodic.is_empty() {
-            let mut memory_block =
-                String::from("\n[구원자와의 관계에 대해 이 정령이 누적한 기억]\n");
-            if let Some(ref summary) = semantic_memory {
-                memory_block.push_str(&format!("- (통합 요약) {}\n", summary));
-            }
-            for note in &recent_episodic {
-                memory_block.push_str(&format!("- (최근 기억) {}\n", note));
-            }
-            system_prompt.push_str(&memory_block);
+        if let Some(ref summary) = semantic_memory {
+            let memory_header = pick(
+                &language,
+                "\n[구원자와의 관계에 대해 이 정령이 누적한 기억]\n".to_string(),
+                "\n[Memories this spirit has accumulated about the relationship with the Savior]\n".to_string(),
+                "\n[这位精灵积累的关于与救世主关系的记忆]\n".to_string(),
+            );
+            let line = pick(
+                &language,
+                format!("- (통합 요약) {}\n", summary),
+                format!("- (Consolidated summary) {}\n", summary),
+                format!("- (综合摘要) {}\n", summary),
+            );
+            system_prompt.push_str(&memory_header);
+            system_prompt.push_str(&line);
         }
 
-        let target_lang_str = match language.as_str() {
+        Ok(system_prompt)
+    }
+
+    pub fn build_behavior_instruction(language: &str) -> String {
+        let target_lang_str = match language {
             "en" => "English",
             "zh_cn" => "Chinese (Simplified)",
             _ => "한국어",
         };
 
-        let persona_behavior_instruction = format!("\n\n[중요 절대 지침]\n\
-            1. 너는 AI가 아니라 설정된 정령 캐릭터 본인이다. 어색한 기계적 번역투(예: '저는 ~에 온 지 꽤 오래되었어요', '역할을 맡게 되어 기뻐요')를 절대 피하고 자연스러운 {lang}로 말해라.\n\
-            2. 매 턴 똑같은 인사말이나 자기소개를 반복하지 말고, 직전 사용자의 말(대화 맥락)에 직접적으로 반응해라.\n\
-            3. 실제 대답을 출력하기 전에 반드시 <think> 태그를 열고 너의 내면의 생각, 감정 변화, 행동 의도를 {lang}로 먼저 작성해라. 생각 과정이 끝나면 </think> 태그를 닫고 대답을 이어가라.\n\
-            (형식 예시: <think>구원자가 내 반응을 보고 싶어하는 것 같다.</think>정말이지, 구원자님도 참!)", lang=target_lang_str);
-        system_prompt.push_str(&persona_behavior_instruction);
-
-        Ok(system_prompt)
+        pick(
+            language,
+            format!("\n\n[중요 절대 지침]\n\
+                1. 너는 AI가 아니라 설정된 정령 캐릭터 본인이다. 어색한 기계적 번역투(예: '저는 ~에 온 지 꽤 오래되었어요', '역할을 맡게 되어 기뻐요')를 절대 피하고 자연스러운 {lang}로 말해라.\n\
+                2. 매 턴 똑같은 인사말이나 자기소개를 반복하지 말고, 직전 사용자의 말(대화 맥락)에 직접적으로 반응해라.\n\
+                3. 실제 대답을 출력하기 전에 반드시 <think> 태그를 열고 너의 내면의 생각, 감정 변화, 행동 의도를 {lang}로 먼저 작성해라. 생각 과정이 끝나면 </think> 태그를 닫고 대답을 이어가라.\n\
+                (형식 예시: <think>구원자가 내 반응을 보고 싶어하는 것 같다.</think>정말이지, 구원자님도 참!)", lang=target_lang_str),
+            format!("\n\n[Critical Absolute Rules]\n\
+                1. You are not an AI - you are the configured spirit character yourself. Absolutely avoid stiff, mechanical translation-style phrasing (e.g. 'I have been here for quite a while', 'I am glad to take on this role') and speak naturally in {lang}.\n\
+                2. Do not repeat the same greeting or self-introduction every turn - respond directly to the Savior's most recent message (conversation context).\n\
+                3. Before writing your actual reply, you must open a <think> tag and first write your inner thoughts, emotional shifts, and intended actions in {lang}. Once the thought process is done, close the </think> tag and continue with your reply.\n\
+                (Format example: <think>The Savior seems to want to see my reaction.</think>Oh come on, Savior!)", lang=target_lang_str),
+            format!("\n\n[重要绝对准则]\n\
+                1. 你不是AI，而是设定好的精灵角色本人。绝对要避免生硬的机械翻译腔（例如：'我来这里已经有一段时间了'、'很高兴能扮演这个角色'），要用自然的{lang}说话。\n\
+                2. 不要每次都重复相同的问候语或自我介绍，要直接回应救世主上一句话（对话语境）。\n\
+                3. 在输出实际回复之前，必须先打开<think>标签，用{lang}写下你的内心想法、情绪变化和行动意图。思考过程结束后关闭</think>标签，再继续回复。\n\
+                （格式示例：<think>救世主好像想看看我的反应。</think>真是的，救世主也是！）", lang=target_lang_str),
+        )
     }
 
-    /// Gemma 2 공식 채팅 템플릿은 역할이 `user`/`model` 둘뿐이다(assistant가 아니라 model).
     fn gemma_role(role: &str) -> &str {
         if role == "assistant" {
             "model"
@@ -235,15 +321,18 @@ impl<'a> ChatService<'a> {
     }
 
     fn render_chat_message(msg: &ChatMessage) -> String {
+        Self::render_chat_message_with_suffix(msg, "")
+    }
+
+    fn render_chat_message_with_suffix(msg: &ChatMessage, suffix: &str) -> String {
         format!(
-            "<start_of_turn>{}\n{}<end_of_turn>\n",
+            "<start_of_turn>{}\n{}{}<end_of_turn>\n",
             Self::gemma_role(&msg.role),
-            msg.content
+            msg.content,
+            suffix
         )
     }
 
-    /// Gemma 2는 system 역할을 지원하지 않으므로, 공식 권장 방식대로
-    /// 시스템 프롬프트를 첫 user 턴에 병합한다.
     pub fn build_llm_system_prefix(system_prompt: &str) -> String {
         format!("<start_of_turn>user\n{}<end_of_turn>\n", system_prompt)
     }
@@ -251,6 +340,7 @@ impl<'a> ChatService<'a> {
     pub fn build_llm_chat_prompt_with_budget<F>(
         system_prompt: &str,
         history: &[ChatMessage],
+        behavior_instruction: &str,
         max_prompt_tokens: usize,
         mut count_tokens: F,
     ) -> Result<String, ChatError>
@@ -265,9 +355,14 @@ impl<'a> ChatService<'a> {
             return Ok(base_prompt);
         }
 
+        let last_index = history.len().saturating_sub(1);
         let mut selected_blocks: Vec<String> = Vec::new();
-        for msg in history.iter().rev() {
-            let block = Self::render_chat_message(msg);
+        for (index, msg) in history.iter().enumerate().rev() {
+            let block = if index == last_index {
+                Self::render_chat_message_with_suffix(msg, behavior_instruction)
+            } else {
+                Self::render_chat_message(msg)
+            };
             let mut candidate = String::new();
             candidate.push_str(&system_block);
             for selected in selected_blocks.iter().rev() {
@@ -318,18 +413,23 @@ impl<'a> ChatService<'a> {
         Ok(ai_msg)
     }
 
+    pub fn turn_memory_text(user_text: &str, ai_text: &str) -> Option<String> {
+        let trimmed_user = user_text.trim();
+        let trimmed_ai = ai_text.trim();
+        if trimmed_user.is_empty() || trimmed_ai.is_empty() {
+            return None;
+        }
+        Some(format!("구원자: {}\n정령: {}", trimmed_user, trimmed_ai))
+    }
+
     pub fn record_turn_memory(
         &self,
         persona_id: &str,
-        user_text: &str,
-        ai_text: &str,
+        memory_text: Option<&str>,
+        memory_vector: &[f32],
         language: &str,
     ) -> Result<Option<String>, ChatError> {
-        let trimmed_user = user_text.trim();
-        let trimmed_ai = ai_text.trim();
-
-        if !trimmed_user.is_empty() && !trimmed_ai.is_empty() {
-            let memory_text = format!("구원자: {}\n정령: {}", trimmed_user, trimmed_ai);
+        if let Some(memory_text) = memory_text {
             let now = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map(|d| d.as_secs().to_string())
@@ -338,8 +438,8 @@ impl<'a> ChatService<'a> {
                 self.conn,
                 &Uuid::new_v4().to_string(),
                 persona_id,
-                &memory_text,
-                &[],
+                memory_text,
+                memory_vector,
                 &now,
             )
             .map_err(|e| ChatError::database(language, &e.to_string()))?;
@@ -371,7 +471,7 @@ impl<'a> ChatService<'a> {
 
         let previous_summary = ChatRepository::get_semantic_memory(self.conn, persona_id)
             .map_err(|e| ChatError::database(language, &e.to_string()))?
-            .unwrap_or_else(|| "없음".to_string());
+            .unwrap_or_else(|| pick(language, "없음".to_string(), "None".to_string(), "无".to_string()));
 
         let episodic_list = episodic
             .iter()
@@ -380,17 +480,40 @@ impl<'a> ChatService<'a> {
             .collect::<Vec<String>>()
             .join("\n");
 
-        let consolidation_prompt = format!(
-            "<start_of_turn>user\n다음은 정령 캐릭터가 구원자(사용자)와의 대화에서 그동안 기록해 \
-             온 개별 기억들과, 이전에 정리했던 통합 요약이다. 이 모든 정보를 종합해 이 캐릭터가 \
-             구원자에 대해 알고 있는 핵심 사실/취향/관계 상태를 한국어 3~5문장 이내로 새롭게 통합 \
-             요약하라. 중복은 제거하고 최신 정보를 우선하라.\n\
-             [이전 통합 요약]\n{}\n\n[개별 기억 목록]\n{}<end_of_turn>\n\
-             <start_of_turn>model\n",
-            previous_summary, episodic_list
+        let instruction = pick(
+            language,
+            format!(
+                "<start_of_turn>user\n다음은 정령 캐릭터가 구원자(사용자)와의 대화에서 그동안 기록해 \
+                 온 개별 기억들과, 이전에 정리했던 통합 요약이다. 이 모든 정보를 종합해 이 캐릭터가 \
+                 구원자에 대해 알고 있는 핵심 사실/취향/관계 상태를 한국어 3~5문장 이내로 새롭게 통합 \
+                 요약하라. 중복은 제거하고 최신 정보를 우선하라.\n\
+                 [이전 통합 요약]\n{}\n\n[개별 기억 목록]\n{}<end_of_turn>\n\
+                 <start_of_turn>model\n",
+                previous_summary, episodic_list
+            ),
+            format!(
+                "<start_of_turn>user\nBelow are the individual memories the spirit character has \
+                 recorded so far from conversations with the Savior (user), along with the previously \
+                 consolidated summary. Synthesize all of this information into a new consolidated \
+                 summary, in English, of 3-5 sentences at most, covering the key facts/preferences/\
+                 relationship status this character knows about the Savior. Remove duplicates and \
+                 prioritize the most recent information.\n\
+                 [Previous consolidated summary]\n{}\n\n[Individual memory list]\n{}<end_of_turn>\n\
+                 <start_of_turn>model\n",
+                previous_summary, episodic_list
+            ),
+            format!(
+                "<start_of_turn>user\n以下是精灵角色至今在与救世主（用户）的对话中记录下来的各项记忆，\
+                 以及之前整理过的综合摘要。请综合以上所有信息，用简体中文以3~5句话以内重新整理出\
+                 这个角色所了解的关于救世主的核心事实/喜好/关系状态的新综合摘要。请去除重复内容，\
+                 并优先采用最新信息。\n\
+                 [之前的综合摘要]\n{}\n\n[各项记忆列表]\n{}<end_of_turn>\n\
+                 <start_of_turn>model\n",
+                previous_summary, episodic_list
+            ),
         );
 
-        Ok(Some(consolidation_prompt))
+        Ok(Some(instruction))
     }
 
     pub fn store_semantic_summary(

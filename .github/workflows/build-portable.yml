@@ -1,0 +1,76 @@
+name: Build Portable
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-portable-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install LLVM
+        run: choco install llvm --no-progress -y
+
+      - name: Resolve LIBCLANG_PATH
+        shell: pwsh
+        run: |
+          $clang = Get-ChildItem -Path 'C:\Program Files\LLVM','C:\Program Files (x86)\LLVM',$env:VCINSTALLDIR -Filter libclang.dll -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $clang) {
+            throw 'libclang.dll not found; bindgen cannot generate llama.cpp FFI bindings.'
+          }
+          "LIBCLANG_PATH=$($clang.DirectoryName)" >> $env:GITHUB_ENV
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Check Rust backend
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Build portable package
+        run: npm run build
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eversoul-ai-chat-portable-${{ github.sha }}
+          path: build/
+          if-no-files-found: error
+
+      - name: Archive portable package
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: Compress-Archive -Path build\* -DestinationPath eversoul-ai-chat-portable.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: eversoul-ai-chat-portable.zip

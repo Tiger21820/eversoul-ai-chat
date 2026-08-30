@@ -177,7 +177,9 @@ impl<'a> ChatSessionController<'a> {
         session.last_access = current_access;
 
         if session.cached_tokens.is_empty() {
-            if let Ok(loaded_tokens) = session.context.state_load_file(&cache_path, 4096) {
+            let max_cached_tokens = engine.profile().context_size as usize;
+            if let Ok(loaded_tokens) = session.context.state_load_file(&cache_path, max_cached_tokens)
+            {
                 session.cached_tokens = loaded_tokens;
             }
         }
@@ -216,7 +218,6 @@ impl<'a> ChatSessionController<'a> {
     ) -> Result<String, LlmError> {
         let current_access = self.ensure_session(persona_id)?;
         let engine = self.engine;
-        let cache_path = self.cache.session_cache_path(persona_id);
 
         {
             let session = self
@@ -257,8 +258,6 @@ impl<'a> ChatSessionController<'a> {
                 request_registry.update_generation(request_id, &result);
                 session.cached_tokens = result.cached_tokens;
 
-                let _ = session.context.state_save_file(&cache_path, &session.cached_tokens);
-
                 if let Some(target) = stream {
                     target.emit_done(request_id, false, None);
                 }
@@ -291,9 +290,6 @@ impl<'a> ChatSessionController<'a> {
                 rebuilt_session.last_generation = Some(Self::generation_stats(&result));
                 request_registry.update_generation(request_id, &result);
                 rebuilt_session.cached_tokens = result.cached_tokens;
-                let _ = rebuilt_session
-                    .context
-                    .state_save_file(&cache_path, &rebuilt_session.cached_tokens);
                 self.sessions.insert(persona_id.to_string(), rebuilt_session);
                 Ok(text)
             }
@@ -330,6 +326,24 @@ impl<'a> ChatSessionController<'a> {
             prompt,
             max_tokens,
         )
+    }
+
+    pub fn persist_all(&self) -> usize {
+        let mut persisted = 0;
+        for (persona_id, session) in &self.sessions {
+            if session.cached_tokens.is_empty() {
+                continue;
+            }
+            let cache_path = self.cache.session_cache_path(persona_id);
+            if session
+                .context
+                .state_save_file(&cache_path, &session.cached_tokens)
+                .is_ok()
+            {
+                persisted += 1;
+            }
+        }
+        persisted
     }
 
     pub fn active_session_ids(&self) -> Vec<String> {

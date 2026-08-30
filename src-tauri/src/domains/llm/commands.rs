@@ -226,6 +226,11 @@ pub fn llm_unload(
         .lock()
         .map_err(|e| LlmError::unknown(&language, &e.to_string()))?;
 
+    if let Some(ref handle) = *engine_lock {
+        let persisted = handle.persist_sessions();
+        startup_debug_log(&format!("command:llm_unload:sessions_persisted:{persisted}"));
+    }
+
     *engine_lock = None;
     startup_debug_log("command:llm_unload:done");
     Ok(())

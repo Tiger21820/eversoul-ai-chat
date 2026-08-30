@@ -54,131 +54,6 @@ impl<'a> PersonaService<'a> {
         let race = json_val["race"].as_str().unwrap_or("-");
         let class = json_val["class"].as_str().unwrap_or("-");
         let sub_class = json_val["sub_class"].as_str().unwrap_or("-");
-        let stat = json_val["stat"].as_str().unwrap_or("-");
-
-        let nick_name = json_val["profile"]["nick_name"].as_str().unwrap_or("-");
-
-        let constellation_raw = json_val["profile"]["constellation"].as_str().unwrap_or("-");
-        let constellation = if constellation_raw.ends_with("자리") {
-            constellation_raw
-        } else {
-            "-"
-        };
-
-        let union = json_val["profile"]["union"].as_str().unwrap_or("-");
-        let birthday = json_val["profile"]["birthday"].as_str().unwrap_or("-");
-
-        let height = json_val["profile"]["height"]
-            .as_f64()
-            .map(|h| format!("{}cm", h))
-            .unwrap_or_else(|| "-".to_string());
-        let weight = json_val["profile"]["weight"]
-            .as_f64()
-            .map(|w| format!("{}kg", w))
-            .unwrap_or_else(|| "-".to_string());
-
-        let cv_ko = json_val["profile"]["cv_ko"].as_str().unwrap_or("-");
-        let cv_jp = json_val["profile"]["cv_jp"].as_str().unwrap_or("-");
-
-        let parse_array = |field_key: &str| -> String {
-            json_val["profile"][field_key]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .map(|v| v.as_str().unwrap_or(""))
-                        .filter(|s| !s.is_empty())
-                        .collect::<Vec<&str>>()
-                        .join(", ")
-                })
-                .unwrap_or_else(|| "-".to_string())
-        };
-
-        let likes = parse_array("like");
-        let dislikes = parse_array("dislike");
-        let hobby = parse_array("hobby");
-        let speciality = parse_array("speciality");
-
-        let description = json_val["personality"]["description"]
-            .as_str()
-            .unwrap_or("-");
-        let greeting = json_val["personality"]["greeting"].as_str().unwrap_or("");
-
-        let mut speech_lines = Vec::new();
-        let mut seen_speech: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        if let Some(patterns) = json_val["speech_patterns"].as_array() {
-            for p in patterns.iter() {
-                if speech_lines.len() >= 12 {
-                    break;
-                }
-                if let Some(s) = p.as_str() {
-                    let trimmed = s.trim();
-                    if !trimmed.is_empty() && seen_speech.insert(trimmed) {
-                        speech_lines.push(format!("- \"{}\"", trimmed));
-                    }
-                }
-            }
-        }
-        let speech_patterns_str = if speech_lines.is_empty() {
-            "-".to_string()
-        } else {
-            speech_lines.join("\n")
-        };
-
-        let dialogue_sample = Self::extract_dialogue_sample(&json_val["dialogues"]["evertalk"], 16);
-
-        let mut comment_lines = Vec::new();
-        if let Some(comments) = json_val["comments"].as_array() {
-            for c in comments.iter() {
-                let writer = c["writer"].as_str().unwrap_or("").trim();
-                let comment = c["comment"].as_str().unwrap_or("").trim();
-                if !writer.is_empty() && !comment.is_empty() {
-                    comment_lines.push(format!("- {}: \"{}\"", writer, comment));
-                }
-            }
-        }
-        let comments_str = if comment_lines.is_empty() {
-            "-".to_string()
-        } else {
-            comment_lines.join("\n")
-        };
-
-        let system_prompt = format!(
-            "당신은 다음 프로필을 가진 정령 캐릭터 역할을 맡아 구원자와 대화해야 합니다.
-반드시 지정된 성격 특징과 대표 대사 말투(종결어미)를 100% 철저히 모사하고 캐릭터 성격을 유지하십시오.
-
-[정령 신체 및 프로필 정보]
-- 이름: {} ({})
-- 별칭: {}
-- 등급/종족/클래스: {} / {} / {} ({}) / {} 계열
-- 별자리/소속: {} / {}
-- 생일/신체: {} / 키: {}, 몸무게: {}
-- 성우: 한국어 - {} / 일본어 - {}
-- 좋아하는 것: {}
-- 싫어하는 것: {}
-- 취미 / 특기: {} / {}
-
-[성격 특징 묘사]
-{}
-
-[대표 대사 말투 예시]
-{}
-
-[말투 참고용 대화 예시 - 아래는 이 캐릭터의 어투/종결어미를 파악하기 위한 참고 자료일 뿐,
-실제로 지금 나누는 대화가 아닙니다. 이 예시에 등장하는 상황, 사건, 대사 내용 자체를
-반복하거나 인용하지 마십시오. 오직 말투와 어조만 참고하십시오.]
-{}
-
-[다른 정령들이 보는 이 캐릭터]
-{}
-
-[응답 태도 - 반드시 준수]
-- 지금 구원자가 실제로 입력한 메시지의 내용에만 집중하여, 그에 맞는 응답을 새로 생성하십시오.
-- 위 대화 예시의 내용/사건/대사를 그대로 반복하거나 재사용하지 마십시오.
-- 캐릭터의 성격과 말투는 유지하되, 구원자의 말이나 제안을 근거 없이 거절, 부정, 무시하지 말고
-  가능한 한 구원자의 뜻에 협조적으로 호응하며 대화를 이어가십시오.
-",
-            name, name_en_val, nick_name, grade, race, class, sub_class, stat, constellation, union, birthday, height, weight, cv_ko, cv_jp, likes, dislikes, hobby, speciality, description, speech_patterns_str, dialogue_sample, comments_str
-        );
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -189,7 +64,17 @@ impl<'a> PersonaService<'a> {
             .to_lowercase()
             .replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
 
-        let config = PersonaConfig {
+        let i18n = &json_val["i18n"];
+        let greeting = if i18n.is_null() {
+            json_val["personality"]["greeting"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        } else {
+            Self::localized_text(&i18n["personality"]["greeting"], language)
+        };
+
+        let mut config = PersonaConfig {
             id: persona_id,
             name: name.to_string(),
             name_en: name_en_val.to_string(),
@@ -197,54 +82,19 @@ impl<'a> PersonaService<'a> {
             race: race.to_string(),
             class: class.to_string(),
             sub_class: sub_class.to_string(),
-            system_prompt,
-            greeting: greeting.to_string(),
+            system_prompt: String::new(),
+            greeting,
             raw_json: json_val.to_string(),
             created_at: now,
         };
+
+        let (_, localized_body) = Self::build_localized_system_prompt(&config, language);
+        config.system_prompt = localized_body;
 
         PersonaRepository::save_persona(self.conn, &config)
             .map_err(|e| PersonaError::database(language, &e.to_string()))?;
 
         Ok(config)
-    }
-
-    fn extract_dialogue_sample(evertalk: &serde_json::Value, limit: usize) -> String {
-        let Some(entries) = evertalk.as_array() else {
-            return "-".to_string();
-        };
-
-        let mut lines: Vec<String> = Vec::new();
-        let mut last: Option<(String, String)> = None;
-
-        for entry in entries {
-            let speaker = entry["speaker"].as_str().unwrap_or("").trim();
-            let message = entry["message"].as_str().unwrap_or("").trim();
-
-            if speaker.is_empty()
-                || message.is_empty()
-                || !message.chars().any(|c| c.is_alphanumeric())
-            {
-                continue;
-            }
-
-            let current = (speaker.to_string(), message.to_string());
-            if last.as_ref() == Some(&current) {
-                continue;
-            }
-            last = Some(current.clone());
-
-            lines.push(format!("{}: {}", current.0, current.1));
-            if lines.len() >= limit {
-                break;
-            }
-        }
-
-        if lines.is_empty() {
-            "-".to_string()
-        } else {
-            lines.join("\n")
-        }
     }
 
     fn supported_language(language: &str) -> &str {
@@ -418,7 +268,7 @@ impl<'a> PersonaService<'a> {
         }
     }
 
-    fn build_localized_system_prompt(persona: &PersonaConfig, language: &str) -> (String, String) {
+    pub(crate) fn build_localized_system_prompt(persona: &PersonaConfig, language: &str) -> (String, String) {
         let parsed = serde_json::from_str::<Value>(&persona.raw_json).unwrap_or(Value::Null);
         let i18n = &parsed["i18n"];
         if i18n.is_null() {

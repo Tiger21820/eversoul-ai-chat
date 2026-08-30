@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { Images, MessageCircle, Send, Sparkles, X, ZoomIn } from 'lucide-react';
+import { Images, MessageCircle, Send, Sparkles, Square, X, ZoomIn } from 'lucide-react';
 import { getRaceTone, getSpiritVisualAssets } from '../../persona';
 import { createConversationSummary, createTalkChoices, pickRandomSpeechLine, pickPokeReactionLine } from '../logic';
 import type { ChatMessage } from '../../chat';
@@ -12,6 +12,8 @@ interface ChatMessageBubbleProps {
     avatarCandidates: string[];
     spiritName: string;
     showReasoning: boolean;
+    deleteLabel: string;
+    onDelete: (messageId: string) => Promise<void>;
 }
 interface GalleryTileProps {
     skin: SpiritSkinVisualAsset;
@@ -45,7 +47,7 @@ function parseThinkBlocks(text: string) {
     }
     return parts;
 }
-const ChatMessageBubble = memo(function ChatMessageBubble({ message, avatarCandidates, spiritName, showReasoning }: ChatMessageBubbleProps) {
+const ChatMessageBubble = memo(function ChatMessageBubble({ message, avatarCandidates, spiritName, showReasoning, deleteLabel, onDelete }: ChatMessageBubbleProps) {
     if (message.role === 'system') {
         return (<div className="ever-message is-system">
           <div className="ever-message__bubble">{message.content}</div>
@@ -68,9 +70,26 @@ const ChatMessageBubble = memo(function ChatMessageBubble({ message, avatarCandi
            })
         )}
       </div>
+      <button type="button" className="ever-message__delete" aria-label={deleteLabel} onClick={() => onDelete(message.id)}>
+        <X aria-hidden="true" size={12}/>
+      </button>
     </div>);
 });
-export function ChatStage({ activeDetail, activeRoom, llmStatus, messages, inputText, isTyping, activeStageTab, onInputChange, onSendMessage, onStageTabChange, messagesListRef, labels, onOpenProfileDetail, showReasoning }: ChatStageProps) {
+export function ChatStage({ activeDetail, activeRoom, llmStatus, messages, previousRooms, previousRoomsLoading, onStartNewChat, onLoadPreviousRooms, onSwitchToRoom, onDeleteMessage, onDeleteRoom, inputText, isTyping, streamingText, streamingRequestId, onCancelStreaming, activeStageTab, onInputChange, onSendMessage, onStageTabChange, messagesListRef, labels, onOpenProfileDetail, showReasoning }: ChatStageProps) {
+    const [historyOpen, setHistoryOpen] = useState(false);
+    async function toggleHistory() {
+        const next = !historyOpen;
+        setHistoryOpen(next);
+        if (next) {
+            await onLoadPreviousRooms();
+        }
+    }
+    async function handleDeleteRoom(event: React.MouseEvent, roomId: string) {
+        event.stopPropagation();
+        if (window.confirm(labels.confirmDeleteChat)) {
+            await onDeleteRoom(roomId);
+        }
+    }
     const assets: SpiritVisualAssets | null = useMemo(() => (activeDetail ? getSpiritVisualAssets(activeDetail) : null), [activeDetail]);
     const tone = useMemo(() => (activeDetail ? getRaceTone(activeDetail.race) : 'tone-neutral'), [activeDetail]);
     const choices = useMemo(() => createTalkChoices(activeDetail, labels), [activeDetail, labels]);
@@ -194,19 +213,50 @@ export function ChatStage({ activeDetail, activeRoom, llmStatus, messages, input
             <div className="ever-chat-panel__room">
               <strong>{activeRoom?.title ?? activeDetail?.name ?? labels.bondChannel}</strong>
               <span>{summary}</span>
+              <div className="ever-chat-panel__room-actions">
+                <button type="button" disabled={!activeDetail} aria-label={labels.newChat} onClick={onStartNewChat}>
+                  {labels.newChat}
+                </button>
+                <button type="button" disabled={!activeDetail} aria-label={labels.previousChats} onClick={toggleHistory}>
+                  {labels.previousChats}
+                </button>
+              </div>
+              {historyOpen && (<div className="ever-chat-panel__history">
+                  {previousRoomsLoading && <span className="ever-chat-panel__history-loading">…</span>}
+                  {!previousRoomsLoading && previousRooms.length === 0 && (
+                    <span className="ever-chat-panel__history-empty">{labels.noPreviousChats}</span>
+                  )}
+                  {!previousRoomsLoading && previousRooms.map((room) => (
+                    <div key={room.id} className={`ever-chat-panel__history-item ${room.id === activeRoom?.id ? 'is-active' : ''}`}>
+                      <button type="button" onClick={async () => { await onSwitchToRoom(room); setHistoryOpen(false); }}>
+                        {room.created_at}
+                      </button>
+                      <button type="button" aria-label={labels.deleteChat} onClick={(event) => handleDeleteRoom(event, room.id)}>
+                        <X aria-hidden="true" size={14}/>
+                      </button>
+                    </div>
+                  ))}
+                </div>)}
             </div>
             <div className="ever-messages" ref={messagesListRef}>
               {messages.length === 0 && (<div className="ever-messages__empty">
                   <strong>{labels.noSavedMessages}</strong>
                   <span>{labels.firstMessageHint}</span>
                 </div>)}
-              {messages.map((message) => (<ChatMessageBubble key={message.id} message={message} avatarCandidates={activeSkin?.avatarCandidates ?? assets?.avatarCandidates ?? []} spiritName={activeDetail?.name ?? ''} showReasoning={showReasoning} />))}
+              {messages.map((message) => (<ChatMessageBubble key={message.id} message={message} avatarCandidates={activeSkin?.avatarCandidates ?? assets?.avatarCandidates ?? []} spiritName={activeDetail?.name ?? ''} showReasoning={showReasoning} deleteLabel={labels.deleteMessage} onDelete={onDeleteMessage} />))}
               {isTyping && (<div className="ever-message is-spirit">
                   <div className="ever-message__avatar">
                     <LoadableAssetImage candidates={activeSkin?.avatarCandidates ?? assets?.avatarCandidates ?? []} alt={activeDetail?.name ?? ''} fallback={<span>{activeDetail?.name.charAt(0) ?? 'E'}</span>}/>
                   </div>
                   <div className="ever-message__bubble">
-                    <span className="ever-typing"><i /><i /><i /></span>
+                    {streamingText
+                      ? parseThinkBlocks(streamingText).map((block, idx) => {
+                          if (block.type === 'think') {
+                              return showReasoning ? <div key={idx} className="ever-message__think" style={{ opacity: 0.7, fontSize: '0.9em', borderLeft: '2px solid rgba(255,255,255,0.3)', paddingLeft: '8px', marginBottom: '8px', whiteSpace: 'pre-wrap' }}>{block.content}</div> : null;
+                          }
+                          return <span key={idx} style={{ whiteSpace: 'pre-wrap' }}>{block.content}</span>;
+                      })
+                      : <span className="ever-typing"><i /><i /><i /></span>}
                   </div>
                 </div>)}
             </div>
@@ -218,9 +268,15 @@ export function ChatStage({ activeDetail, activeRoom, llmStatus, messages, input
                     </button>))}
                 </div>)}
               <input value={inputText} onChange={(event) => onInputChange(event.target.value)} disabled={!canUseComposer} placeholder={activeDetail && llmStatus?.is_loaded ? labels.messagePlaceholder(activeDetail.name) : labels.modelRequiredPlaceholder}/>
-              <button type="submit" aria-label={labels.send} disabled={!canUseComposer || !inputText.trim()}>
-                <Send aria-hidden="true" size={22}/>
-              </button>
+              {streamingRequestId ? (
+                <button type="button" aria-label={labels.stopGenerating} onClick={onCancelStreaming}>
+                  <Square aria-hidden="true" size={22}/>
+                </button>
+              ) : (
+                <button type="submit" aria-label={labels.send} disabled={!canUseComposer || !inputText.trim()}>
+                  <Send aria-hidden="true" size={22}/>
+                </button>
+              )}
             </form>
           </div>) : (<div className="ever-gallery-panel">
             <div className="ever-chat-panel__room">

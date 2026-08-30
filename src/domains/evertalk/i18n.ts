@@ -80,11 +80,18 @@ export interface EverTalkLabels {
     modelWaiting: string;
     spiritReaction: string;
     bondChannel: string;
+    newChat: string;
+    previousChats: string;
+    noPreviousChats: string;
+    deleteMessage: string;
+    deleteChat: string;
+    confirmDeleteChat: string;
     noSavedMessages: string;
     firstMessageHint: string;
     messagePlaceholder: (name: string) => string;
     modelRequiredPlaceholder: string;
     send: string;
+    stopGenerating: string;
     chat: string;
     gallery: string;
     dataLoadFailed: string;
@@ -299,11 +306,18 @@ export const EVERTALK_LABELS: Record<AppLanguage, EverTalkLabels> = {
         modelWaiting: '로컬 모델 대기',
         spiritReaction: '정령 반응 보기',
         bondChannel: '인연 채널',
+        newChat: '새 채팅',
+        previousChats: '이전 채팅',
+        noPreviousChats: '이전 채팅 기록이 없습니다',
+        deleteMessage: '메시지 삭제',
+        deleteChat: '채팅 삭제',
+        confirmDeleteChat: '이 채팅 기록을 삭제하시겠습니까?',
         noSavedMessages: '저장된 대화가 없습니다',
         firstMessageHint: '첫 메시지를 보내면 SQLite 세션에 대화가 누적됩니다.',
         messagePlaceholder: (name) => `${name}에게 메시지를 입력하세요...`,
         modelRequiredPlaceholder: '정령과 로컬 모델 연결을 확인하세요',
         send: '전송',
+        stopGenerating: '생성 중지',
         chat: '대화',
         gallery: '갤러리',
         dataLoadFailed: '정령 데이터 로드 실패',
@@ -512,11 +526,18 @@ export const EVERTALK_LABELS: Record<AppLanguage, EverTalkLabels> = {
         modelWaiting: 'Local model waiting',
         spiritReaction: 'Show soul reaction',
         bondChannel: 'Bond Channel',
+        newChat: 'New Chat',
+        previousChats: 'Previous Chats',
+        noPreviousChats: 'No previous chat history',
+        deleteMessage: 'Delete message',
+        deleteChat: 'Delete chat',
+        confirmDeleteChat: 'Delete this chat history?',
         noSavedMessages: 'No saved messages',
         firstMessageHint: 'Send the first message to store the conversation in the SQLite session.',
         messagePlaceholder: (name) => `Message ${name}...`,
         modelRequiredPlaceholder: 'Check the selected soul and local model connection',
         send: 'Send',
+        stopGenerating: 'Stop generating',
         chat: 'Chat',
         gallery: 'Gallery',
         dataLoadFailed: 'Failed to load soul data',
@@ -725,11 +746,18 @@ export const EVERTALK_LABELS: Record<AppLanguage, EverTalkLabels> = {
         modelWaiting: '等待本地模型',
         spiritReaction: '查看精灵反应',
         bondChannel: '羁绊频道',
+        newChat: '新对话',
+        previousChats: '历史对话',
+        noPreviousChats: '暂无历史对话记录',
+        deleteMessage: '删除消息',
+        deleteChat: '删除对话',
+        confirmDeleteChat: '确定要删除这段对话记录吗？',
         noSavedMessages: '暂无保存的对话',
         firstMessageHint: '发送第一条消息后会累积到 SQLite 会话。',
         messagePlaceholder: (name) => `向 ${name} 发送消息...`,
         modelRequiredPlaceholder: '请确认精灵与本地模型连接',
         send: '发送',
+        stopGenerating: '停止生成',
         chat: '聊天',
         gallery: '图库',
         dataLoadFailed: '精灵数据加载失败',

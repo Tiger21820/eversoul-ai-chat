@@ -58,6 +58,9 @@ enum WorkerCommand {
     RequestStatuses {
         respond_to: Sender<Vec<LlmRequestStatus>>,
     },
+    PersistSessions {
+        respond_to: Sender<usize>,
+    },
 }
 
 #[derive(Clone)]
@@ -226,6 +229,9 @@ impl LlmWorkerHandle {
                 WorkerCommand::RequestStatuses { respond_to } => {
                     let _ = respond_to.send(request_registry.statuses());
                 }
+                WorkerCommand::PersistSessions { respond_to } => {
+                    let _ = respond_to.send(session_ctrl.persist_all());
+                }
             }
         }
     }
@@ -370,6 +376,18 @@ impl LlmWorkerHandle {
             return Vec::new();
         }
         response.recv().unwrap_or_default()
+    }
+
+    pub fn persist_sessions(&self) -> usize {
+        let (respond_to, response) = mpsc::channel();
+        if self
+            .sender
+            .send(WorkerCommand::PersistSessions { respond_to })
+            .is_err()
+        {
+            return 0;
+        }
+        response.recv().unwrap_or(0)
     }
 
     pub fn model_path(&self) -> &Path {

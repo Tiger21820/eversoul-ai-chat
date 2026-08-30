@@ -1,4 +1,4 @@
-import { copyFile, cp, mkdir, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, rm, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,8 +13,6 @@ const releaseExePath = path.join(
   'eversoul-ai-chat.exe',
 );
 const portableExePath = path.join(portableDir, 'eversoul-ai-chat.exe');
-const sourceDataDir = path.join(rootDir, 'data');
-const portableDataDir = path.join(portableDir, 'data');
 const portableModelDir = path.join(portableDir, 'ai', 'model');
 
 async function ensureFile(filePath, label) {
@@ -24,22 +22,13 @@ async function ensureFile(filePath, label) {
   }
 }
 
-async function ensureDirectory(dirPath, label) {
-  const entry = await stat(dirPath).catch(() => null);
-  if (!entry?.isDirectory()) {
-    throw new Error(`${label} 폴더를 찾을 수 없습니다: ${dirPath}`);
-  }
-}
-
 await ensureFile(releaseExePath, 'Tauri release exe');
 
 await rm(portableDir, { recursive: true, force: true });
 await mkdir(portableDir, { recursive: true });
 await copyFile(releaseExePath, portableExePath, constants.COPYFILE_FICLONE);
-await mkdir(portableDataDir, { recursive: true });
 await mkdir(portableModelDir, { recursive: true });
 
 console.info(`포터블 빌드 생성 완료: ${portableDir}`);
 console.info(`- exe: ${portableExePath}`);
-console.info(`- data: ${portableDataDir}`);
 console.info(`- model folder: ${portableModelDir}`);

@@ -2,6 +2,8 @@ use r2d2::ManageConnection;
 use rusqlite::{Connection, Result};
 use std::path::PathBuf;
 
+const BUSY_TIMEOUT_MS: i64 = 5000;
+
 pub struct DatabaseManager {
     path: PathBuf,
 }
@@ -26,6 +28,7 @@ impl ManageConnection for SqliteConnectionManager {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "busy_timeout", BUSY_TIMEOUT_MS)?;
         Ok(conn)
     }
 
@@ -65,6 +68,7 @@ impl DatabaseManager {
         let conn = Connection::open(&self.path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "busy_timeout", BUSY_TIMEOUT_MS)?;
         Self::migrate(&conn)?;
         Ok(conn)
     }

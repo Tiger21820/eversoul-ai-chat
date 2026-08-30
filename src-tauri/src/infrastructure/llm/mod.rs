@@ -25,7 +25,6 @@ use crate::startup_debug_log;
 
 pub const GEMMA_MODEL_PATH: &str = "ai/model/gemma-2-2b-it-Q4_K_M.gguf";
 
-/// 이 프로젝트가 지원하는 로컬 모델은 gemma-2-2b-it 하나로 고정이다.
 pub fn get_model_relative_path(_active_model: &str) -> &'static str {
     GEMMA_MODEL_PATH
 }
@@ -95,10 +94,6 @@ impl<'a> GenerationRuntime<'a> {
     }
 }
 
-/// `code`는 상위(도메인) 계층이 분기 판단에 쓰는 태그, `message`는 이 에러가
-/// 생성되는 시점에 이미 알고 있는 언어(ko/en/zh_cn/zh_tw)로 렌더링된 텍스트다.
-/// 이 detail 문자열은 domain::llm::types::LlmError의 message에 그대로 흡수되어
-/// 최종적으로 Tauri IPC를 통해 프론트엔드 화면에 표시되므로 한국어 하드코딩 금지.
 #[derive(Debug, Error, Clone)]
 #[error("[{code}] {message}")]
 pub struct LlmError {
@@ -201,8 +196,14 @@ impl LlmEngine {
                 &self.language,
                 &pick(
                     &self.language,
-                    format!("LLM 컨텍스트 크기가 너무 작습니다: {}", self.profile.context_size),
-                    format!("LLM context size is too small: {}", self.profile.context_size),
+                    format!(
+                        "LLM 컨텍스트 크기가 너무 작습니다: {}",
+                        self.profile.context_size
+                    ),
+                    format!(
+                        "LLM context size is too small: {}",
+                        self.profile.context_size
+                    ),
                     format!("LLM 上下文大小过小：{}", self.profile.context_size),
                 ),
             ));
@@ -215,7 +216,6 @@ impl LlmEngine {
     }
 
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<LlamaToken>, LlmError> {
-        // Gemma 2 공식 채팅 템플릿은 프롬프트 맨 앞에 BOS 토큰이 있어야 한다.
         let tokens = self
             .model
             .str_to_token(prompt, llama_cpp_2::model::AddBos::Always)
@@ -292,12 +292,11 @@ impl LlmEngine {
             LlamaBackend::init().map_err(|e| LlmError::backend_init(language, &e.to_string()))?;
         startup_debug_log("llm_engine:load:backend_ready");
 
-        let mut model_params = std::pin::pin!(LlamaModelParams::default()
-            .with_n_gpu_layers(0)
-            .with_use_mmap(false)
+        let model_params = std::pin::pin!(LlamaModelParams::default()
+            .with_n_gpu_layers(1000)
+            .with_use_mmap(true)
             .with_use_mlock(false));
-        model_params.as_mut().add_cpu_buft_override(c".*");
-        startup_debug_log("llm_engine:load:model_params:cpu_direct_no_mmap");
+        startup_debug_log("llm_engine:load:model_params:gpu_auto_offload");
 
         let model =
             LlamaModel::load_from_file(&backend, &model_path, model_params.as_ref().get_ref())
@@ -348,12 +347,10 @@ impl LlmEngine {
         &self,
         context_size: u32,
     ) -> Result<LlamaContext<'_>, LlmError> {
-        let n_threads = self.profile.thread_count;
-
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(std::num::NonZeroU32::new(context_size))
-            .with_n_threads(n_threads)
-            .with_n_threads_batch(n_threads);
+            .with_n_threads(self.profile.thread_count)
+            .with_n_threads_batch(self.profile.batch_thread_count);
 
         self.model
             .new_context(&self.backend, ctx_params)
@@ -440,7 +437,7 @@ impl LlmEngine {
             let next_token = sampler.sample(ctx, -1);
             sampler.accept(next_token);
 
-            if next_token == self.model.token_eos() {
+            if self.model.is_eog_token(next_token) {
                 break;
             }
 
@@ -469,8 +466,6 @@ impl LlmEngine {
     }
 
     pub fn count_tokens(&self, text: &str) -> Result<usize, LlmError> {
-        // 프롬프트 예산 계산(build_llm_chat_prompt_with_budget)이 실제 생성 시
-        // tokenize_prompt와 동일한 토큰 수를 세도록 BOS 포함 여부를 맞춘다.
         let tokens = self
             .model
             .str_to_token(text, llama_cpp_2::model::AddBos::Always)
@@ -530,17 +525,26 @@ impl LlmEngine {
 
         let new_tokens = &prompt_tokens[common_len..];
         if !new_tokens.is_empty() {
-            let mut batch = LlamaBatch::new(new_tokens.len(), 1);
-            for (offset, &token) in new_tokens.iter().enumerate() {
-                let position = (common_len + offset) as i32;
-                let is_last = offset == new_tokens.len() - 1;
-                batch
-                    .add(token, position, &[0], is_last)
-                    .map_err(|e| LlmError::infer(&self.language, &e.to_string()))?;
-            }
+            let n_batch = (ctx.n_batch() as usize).max(1);
+            let total = new_tokens.len();
+            let mut processed = 0;
 
-            ctx.decode(&mut batch)
-                .map_err(|e| LlmError::infer(&self.language, &e.to_string()))?;
+            for chunk in new_tokens.chunks(n_batch) {
+                runtime.ensure_not_cancelled()?;
+                let mut batch = LlamaBatch::new(chunk.len(), 1);
+                for (offset, &token) in chunk.iter().enumerate() {
+                    let position = (common_len + processed + offset) as i32;
+                    let is_last = (processed + offset) == total - 1;
+                    batch
+                        .add(token, position, &[0], is_last)
+                        .map_err(|e| LlmError::infer(&self.language, &e.to_string()))?;
+                }
+
+                ctx.decode(&mut batch)
+                    .map_err(|e| LlmError::infer(&self.language, &e.to_string()))?;
+
+                processed += chunk.len();
+            }
         }
 
         let seed = std::time::SystemTime::now()
@@ -569,7 +573,7 @@ impl LlmEngine {
             let next_token = sampler.sample(ctx, -1);
             sampler.accept(next_token);
 
-            if next_token == self.model.token_eos() {
+            if self.model.is_eog_token(next_token) {
                 break;
             }
 
@@ -656,7 +660,7 @@ impl LlmEngine {
             for chunk in new_tokens.chunks(n_batch) {
                 runtime.ensure_not_cancelled()?;
                 let mut batch = LlamaBatch::new(chunk.len(), 1);
-                
+
                 for (offset, &token) in chunk.iter().enumerate() {
                     let position = (common_len + processed + offset) as i32;
                     let is_last = (processed + offset) == total - 1;
@@ -667,7 +671,7 @@ impl LlmEngine {
 
                 ctx.decode(&mut batch)
                     .map_err(|e| LlmError::infer(&self.language, &e.to_string()))?;
-                
+
                 processed += chunk.len();
                 if let Some(cb) = runtime.progress_callback.as_deref_mut() {
                     cb(processed, total);
@@ -691,15 +695,6 @@ impl LlmEngine {
         })
     }
 
-    pub fn mount_persona_adapter(&self, persona_id: &str) -> Result<bool, LlmError> {
-        let adapter_path = self.adapters_dir.join(format!("{persona_id}.gguf"));
-        if !adapter_path.exists() {
-            return Ok(false);
-        }
-
-        Ok(true)
-    }
-
     pub fn embed_text(&self, text: &str) -> Result<Vec<f32>, LlmError> {
         let mut tokens = self
             .model
@@ -715,15 +710,14 @@ impl LlmEngine {
             tokens.truncate(max_embedding_tokens);
         }
 
-        let n_threads = self.profile.thread_count;
         let context_size = u32::try_from(tokens.len().max(1))
             .unwrap_or(self.profile.context_size)
             .min(self.profile.context_size);
 
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(std::num::NonZeroU32::new(context_size))
-            .with_n_threads(n_threads)
-            .with_n_threads_batch(n_threads)
+            .with_n_threads(self.profile.thread_count)
+            .with_n_threads_batch(self.profile.batch_thread_count)
             .with_embeddings(true)
             .with_pooling_type(LlamaPoolingType::Last);
 
@@ -731,6 +725,11 @@ impl LlmEngine {
             .model
             .new_context(&self.backend, ctx_params)
             .map_err(|e| LlmError::context_create(&self.language, &e.to_string()))?;
+
+        let embedding_batch_limit = (ctx.n_batch() as usize).max(1);
+        if tokens.len() > embedding_batch_limit {
+            tokens.truncate(embedding_batch_limit);
+        }
 
         let mut batch = LlamaBatch::new(tokens.len(), 1);
         for (i, &token) in tokens.iter().enumerate() {
@@ -806,8 +805,14 @@ mod tests {
     #[test]
     fn llm_real_model_generates_text() {
         let root = project_root();
-        let engine = LlmEngine::load(&root, root.join("lora_adapters"), test_profile(), GEMMA_MODEL_PATH, "ko")
-            .expect("실제 GGUF 모델 로드 실패");
+        let engine = LlmEngine::load(
+            &root,
+            root.join("lora_adapters"),
+            test_profile(),
+            GEMMA_MODEL_PATH,
+            "ko",
+        )
+        .expect("실제 GGUF 모델 로드 실패");
         let output = engine
             .infer(
                 "<start_of_turn>user\n한국어로 한 단어만 인사해줘<end_of_turn>\n<start_of_turn>model\n",
@@ -843,8 +848,14 @@ mod tests {
     #[test]
     fn llm_kv_cache_reuse_regression_uses_real_context() {
         let root = project_root();
-        let engine = LlmEngine::load(&root, root.join("lora_adapters"), test_profile(), GEMMA_MODEL_PATH, "ko")
-            .expect("실제 GGUF 모델 로드 실패");
+        let engine = LlmEngine::load(
+            &root,
+            root.join("lora_adapters"),
+            test_profile(),
+            GEMMA_MODEL_PATH,
+            "ko",
+        )
+        .expect("실제 GGUF 모델 로드 실패");
         let mut ctx = engine.create_context().expect("LLM 컨텍스트 생성 실패");
         let prompt = "<start_of_turn>user\n한국어로 짧게 테스트에 답해줘<end_of_turn>\n<start_of_turn>model\n";
         let first = engine

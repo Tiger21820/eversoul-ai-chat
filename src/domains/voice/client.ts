@@ -9,10 +9,4 @@ export const voiceClient = {
             file_name: fileName,
         });
     },
-    async synthesize(personaId: string, text: string): Promise<number[]> {
-        return invokeCommand<number[]>(tauriCommands.voice.synthesize, {
-            persona_id: personaId,
-            text,
-        });
-    },
 };

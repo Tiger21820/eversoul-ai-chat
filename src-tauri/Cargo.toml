@@ -1,6 +1,6 @@
 [package]
 name = "eversoul-ai-chat"
-version = "0.0.20"
+version = "0.0.21"
 description = "A Tauri App"
 authors = ["GarnetRapture <garnet@everlib.pro>"]
 repository = "https://github.com/GarnetRapture/eversoul-ai-chat"
@@ -45,7 +45,8 @@ tauri-plugin-dialog = "2.7.1"
 tauri-plugin-fs = "2.5.1"
 # CPU 기반 로컬 LLM 추론 (GGUF 포맷)
 # Windows 빌드 요구사항: Visual Studio Build Tools (MSVC) + CMake + Clang
-# GPU 가속 필요 시 features = ["cuda"] 또는 features = ["vulkan"] 으로 변경
+# GPU 가속: features = ["cuda"] 시도했으나 이 환경은 CMake가 CUDA Toolkit(D:\cuda)을
+# Visual Studio 제너레이터에서 찾지 못해 빌드 자체가 깨짐(CMake Error: No CUDA toolset found).
 llama-cpp-2 = "0.1"
 # 논리 코어(하이퍼스레딩 포함) 대신 물리 코어 수를 기준으로 추론 스레드를 산정하기 위함.
 # CPU 추론은 메모리 대역폭 바운드라 논리 코어까지 다 쓰면 캐시/메모리 경합으로 오히려 느려진다.

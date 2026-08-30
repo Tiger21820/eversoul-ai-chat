@@ -291,6 +291,11 @@ impl ChatRepository {
         Ok(())
     }
 
+    pub fn delete_message(conn: &Connection, id: &str) -> Result<()> {
+        conn.execute("DELETE FROM chat_message WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     pub fn insert_episodic_memory(
         conn: &Connection,
         id: &str,

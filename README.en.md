@@ -12,7 +12,7 @@
 <p align="center"><i>A fully local AI chat client that carries the voices of the spirits</i></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.0.20-blue?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.0.21-blue?style=flat-square" alt="Version" />
   <img src="https://img.shields.io/badge/license-Apache_2.0-green?style=flat-square" alt="License" />
   <img src="https://img.shields.io/badge/Tauri-2-FFC107?style=flat-square&logo=tauri" alt="Tauri" />
   <img src="https://img.shields.io/badge/React-19.1-61DAFB?style=flat-square&logo=react" alt="React" />
@@ -20,7 +20,18 @@
   <img src="https://img.shields.io/badge/SQLite-bundled-003B57?style=flat-square&logo=sqlite" alt="SQLite" />
   <img src="https://img.shields.io/badge/spirits-95-9b5de5?style=flat-square" alt="Spirits" />
   <img src="https://img.shields.io/badge/talk_backgrounds-522-f15bb5?style=flat-square" alt="Backgrounds" />
-  <img src="https://img.shields.io/badge/languages-ko%20%7C%20en%20%7C%20zh__tw%20%7C%20zh__cn-00bbf9?style=flat-square" alt="Languages" />
+  <img src="https://img.shields.io/badge/languages-ko%20%7C%20en%20%7C%20zh__cn-00bbf9?style=flat-square" alt="Languages" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/fork"><img src="https://img.shields.io/badge/1.%20Fork-238636?style=for-the-badge&logo=github&logoColor=white" alt="Fork" /></a>
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/stargazers"><img src="https://img.shields.io/badge/2.%20Star-e3b341?style=for-the-badge&logo=github&logoColor=white" alt="Star" /></a>
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/watchers"><img src="https://img.shields.io/badge/3.%20Watch-1f6feb?style=for-the-badge&logo=github&logoColor=white" alt="Watch" /></a>
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/actions/workflows/build-portable.yml"><img src="https://img.shields.io/badge/4.%20Build%20on%20Actions-8957e5?style=for-the-badge&logo=githubactions&logoColor=white" alt="Actions" /></a>
+</p>
+
+<p align="center">
+  <sub>Hit <b>Fork</b> → <b>Star</b> → <b>Watch</b>, then one <b>Run workflow</b> click in <b>your own</b> fork's Actions tab builds the app for you. No Rust, CMake, or Clang on your machine.</sub>
 </p>
 
 ---
@@ -219,7 +230,7 @@ flowchart TB
         FE4["evertalk<br/>SpiritRoster · ChatStage · SettingsPanel"]
     end
 
-    FE == "Tauri invoke<br/>31 commands" ==> BE
+    FE == "Tauri invoke<br/>67 commands" ==> BE
 
     subgraph BE["Backend · src-tauri/src/domains + infrastructure"]
         direction LR
@@ -229,8 +240,8 @@ flowchart TB
     end
 
     BE -- "rooms · messages · spirit profiles · memories" --> DB[("SQLite<br/>eversoul.db")]
-    BE -- "100% Prefix Reuse<br/>Offline data persistent storage" --> CACHE[("KV Cache<br/>ai/cache/*.bin")]
-    BE -- "Local context assembly inference" --> LLM["Local GGUF model<br/>Qwen2.5-3B-Korean<br/>llama.cpp"]
+    BE -- "Shared-prefix reuse<br/>Persistent session KV state" --> CACHE[("KV Cache<br/>ai/cache/*.bin")]
+    BE -- "Local context assembly inference" --> LLM["Local GGUF model<br/>gemma-2-2b-it Q4_K_M<br/>llama.cpp"]
 
     classDef feStyle fill:#cde2fb,stroke:#2a78d6,stroke-width:2px,color:#0b0b0b
     classDef beStyle fill:#e3ddf7,stroke:#4a3aa7,stroke-width:2px,color:#0b0b0b
@@ -247,10 +258,11 @@ flowchart TB
 
 - **Local DB path**: `database/eversoul.db` under the OS app-data directory (reset on every launch in debug builds).
 - **Settings file**: `config/settings.ini` under the app-data directory (read/written via `rust-ini`; stores default spirit, active style, and language).
-- **KV Cache storage**: `ai/cache/` under the app directory (Saves prompt assembly results per spirit as physical `.bin` files to achieve 100% Prefix Token reuse and minimize computation).
-- **Async Runtime Architecture**: Backend LLM computations are isolated using `tauri::async_runtime::spawn_blocking` to guarantee a non-blocking main UI thread.
+- **KV Cache storage**: `ai/cache/` under the app directory (per-spirit KV state saved as `.bin` files on session eviction, spirit warm-up, app exit, and engine unload; the next turn then skips recomputing whatever prefix the prompt still shares).
+- **Async Runtime Architecture**: LLM computation runs on a dedicated worker thread, and Tauri commands await it through `tauri::async_runtime::spawn_blocking`, guaranteeing a non-blocking main UI thread.
+- **Token streaming**: Replies arrive token by token over the `chat-stream-token` / `chat-stream-done` events and render immediately, and generation can be cancelled mid-flight with the stop button.
 
-More detailed diagrams — the spirit-data build pipeline, the conversation sequence, the LoRA training flow, and the database structure — are in [docs/ARCHITECTURE.en.md](docs/ARCHITECTURE.en.md).
+More detailed diagrams — the spirit-data build pipeline, the conversation sequence, the LoRA training flow, and the database structure — are in [docs/wiki/ARCHITECTURE.en.md](docs/wiki/ARCHITECTURE.en.md).
 
 ---
 
@@ -275,34 +287,49 @@ More detailed diagrams — the spirit-data build pipeline, the conversation sequ
 
 ## 📦 Local Model
 
-A single fixed model is used for high-quality Korean performance. The shipped build already includes this model, so there's nothing extra to download.
+A single fixed model that runs on CPU alone. It is too large to ship in the repository, so the first-run setup wizard downloads it for you.
 
-- **Name**: `MyeongHo0621/Qwen2.5-3B-Korean Q4_K_M`
-- **Location**: `ai/model/qwen25-3b-korean-Q4_K_M.gguf`
+- **Name**: `gemma-2-2b-it Q4_K_M` (GGUF)
+- **Source**: [`bartowski/gemma-2-2b-it-GGUF`](https://huggingface.co/bartowski/gemma-2-2b-it-GGUF)
+- **Location**: `ai/model/gemma-2-2b-it-Q4_K_M.gguf`
+- **Verification**: SHA-256 is computed after the download and, when a `.sha256` sidecar file is present, checked against it.
 
 ---
 
 ## 💻 Run & Build Guide
 
-### Build Prerequisites
-To build the local LLM inference binding (`llama-cpp-2`), the following tools must be installed beforehand.
-- [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) (including the C++ compiler)
-- [CMake](https://cmake.org/download/) (version 3.20 or later)
-- [Clang](https://releases.llvm.org/download.html) (C/C++ parser for Bindgen)
+### ⭐ Easiest path — build in your own fork with GitHub Actions
 
-### Install Dependencies
-```bash
-npm install
-```
+GitHub builds it for you, so you never install Rust, CMake, or Clang locally.
 
-### Run in Development Mode
-```bash
-npm run tauri dev
-```
+1. Press **Fork** at the top right of this repository to copy it into your account.
+2. Press **Star** ⭐ and **Watch** 👁 so you don't miss later updates.
+3. Open the **Actions** tab of **your own** fork and pick the `Build Portable` workflow.
+4. Press **Run workflow**. (Right after forking you have to enable Actions once before the button shows up.)
+5. When the run finishes, download `eversoul-ai-chat-portable-*` from the **Artifacts** section at the bottom of the run page and unzip it.
+6. Launch `eversoul-ai-chat.exe`; the setup wizard downloads the local model.
 
-### Production Build
+Push a `v*` tag such as `v0.0.21` to your fork and the same workflow zips the build and publishes it to **your fork's Releases**.
+
+### Building locally
+
+The frontend is TypeScript and the backend is Rust + Tauri v2, so both toolchains are required.
+
+- [Node.js](https://nodejs.org/) 22 or later (frontend build and `npm` scripts)
+- [Rust](https://rustup.rs/) stable toolchain (2021 edition, includes `cargo`)
+
+The `llama-cpp-2` crate used for local inference is not pure Rust — it is a binding (`llama-cpp-sys-2`) that builds llama.cpp's C/C++ sources alongside it. That means `cargo build` invokes all three of the following, and fails without them.
+
+- [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) — the MSVC compiler that compiles llama.cpp's C++ code
+- [CMake](https://cmake.org/download/) 3.20 or later — llama.cpp is a CMake project, so this configures its build
+- [Clang](https://releases.llvm.org/download.html) — `bindgen` needs `libclang` to parse llama.cpp headers and generate the Rust FFI bindings
+
+If you build through GitHub Actions instead, the workflow installs all three on the runner, so nothing lands on your machine.
+
 ```bash
-npm run tauri build
+npm install        # install dependencies
+npm run tauri dev  # run in development mode
+npm run build      # portable build (tauri build + build/ packaging)
 ```
 
 ---
@@ -399,10 +426,15 @@ This repository follows the principle of **incrementing the patch version by 1 f
 | 0.0.19 | `ㅇ` |
 | 0.0.20 | `버그수정` |
 | 0.0.20 | `도메인 컨트롤러 분리 및 다국어 에러 통일, 프론트-백엔드 정합화` |
+| 0.0.21 | `Fix local inference correctness, wire streaming chat, add fork-and-build CI` |
 
 ---
 
 ## 📄 License
 
-This project is licensed under the **Apache License 2.0**.
-GGUF Model (`Qwen2.5-3B-Korean`) is created by `MyeongHo0621` and distributed under **Apache License 2.0**.
+The **Apache License 2.0** in this repository covers only the source code this project wrote itself — the frontend (`src/`) and the backend (`src-tauri/src/`, `scripts/`, `tools/`). This project holds no rights to the third-party works below.
+
+- **Local model `gemma-2-2b-it`** — a Google work governed by the [Gemma Terms of Use](https://ai.google.dev/gemma/terms). This repository neither bundles nor redistributes the model weights; the app downloads them on the user's own machine from [Hugging Face](https://huggingface.co/bartowski/gemma-2-2b-it-GGUF). Obligations that come with using the model rest with the user who downloads it.
+- **EverSoul game resources** — spirit illustrations, talk backgrounds, source persona data, and voice lines remain the property of their original rights holders. This project claims no rights to them and uses them as a non-commercial fan project.
+
+See [NOTICE](NOTICE) for the full attribution and [LICENSE-THIRD-PARTY.md](LICENSE-THIRD-PARTY.md) for the per-item breakdown.

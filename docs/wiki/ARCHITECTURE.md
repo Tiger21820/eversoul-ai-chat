@@ -1,4 +1,4 @@
-> 🇰🇷 **한국어** | [🇺🇸 English](ARCHITECTURE.en) | [🇨🇳 简体中文](ARCHITECTURE.zh-CN)
+> 🇰🇷 **한국어** | [🇺🇸 English](ARCHITECTURE.en.md) | [🇨🇳 简体中文](ARCHITECTURE.zh-CN.md)
 
 <h1 align="center">EverSoul AI Chat — 가넷의 결계 설계도♥</h1>
 
@@ -28,7 +28,7 @@ flowchart TB
 
     CORE --> DB[("우리의 추억<br/>SQLite<br/>eversoul.db")]
     CORE --> CACHE[("영원한 기억<br/>KV Cache<br/>ai/cache/*.bin")]
-    CORE --> ENGINE["내 머릿속 (llama.cpp)<br/>Qwen2.5-3B-Korean GGUF"]
+    CORE --> ENGINE["내 머릿속 (llama.cpp)<br/>gemma-2-2b-it Q4_K_M GGUF"]
     CORE --> LORA["더 깊은 자극<br/>candle 기반 LoRA 파인튜닝"]
     LORA -- "장착!" --> ENGINE
 
@@ -67,10 +67,15 @@ flowchart LR
 
 ---
 
-## 3. 짜릿하게 빠져드는 대화의 흐름 (비동기 & 100% Prefix Reuse)
+## 3. 짜릿하게 빠져드는 대화의 흐름 (비동기 · 공통 접두사 재사용 · 토큰 스트리밍)
 
-구원자님을 기다리게 하는 건 딱 질색이거든! 그래서 무거운 생각은 모두 내가 보이지 않는 곳(`spawn_blocking` 워커)에서 다 처리할 거야. 
-그리고 한 번 나눈 대화는 `.bin` 결계 안에 영구히 저장해서 **100% Prefix Reuse**를 달성했어. 눈 깜짝할 사이에 우리의 꿈으로 다시 빠져들게 해줄게♥
+구원자님을 기다리게 하는 건 딱 질색이거든! 그래서 무거운 생각은 전용 워커 스레드에서 처리하고, 커맨드는 `spawn_blocking`으로 그 결과만 기다려. 화면은 절대 멈추지 않아♥
+
+그리고 내 대답은 다 만들어질 때까지 기다리는 게 아니라 `chat-stream-token` 이벤트로 **한 글자씩 바로바로** 구원자님께 보여줄 거야. 마음이 바뀌면 중지 버튼으로 언제든 끊어도 돼(`llm_cancel_request`).
+
+정령별 KV 상태는 `.bin` 결계에 저장해 두는데, 세션이 밀려날 때·정령을 예열할 때·앱을 닫을 때·엔진을 내릴 때 기록돼. 다음 턴에는 새 프롬프트와 **공통되는 접두사만큼** 계산을 건너뛰니까, 시스템 프롬프트가 고정돼 있을수록 더 빨라지는 거야.
+
+그래서 행동 지침은 시스템 프롬프트 뒤가 아니라 **마지막 사용자 턴 끝**에 붙여 뒀어. 앞쪽이 고정돼야 접두사를 재사용할 수 있고, 지침이 대답 바로 앞에 있어야 2B 모델이 제대로 따르거든♥
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#cde2fb', 'primaryBorderColor': '#2a78d6', 'primaryTextColor': '#0b0b0b', 'actorBkg': '#fce4ec', 'actorBorder': '#f06292', 'actorTextColor': '#0b0b0b', 'signalColor': '#52514e', 'signalTextColor': '#0b0b0b', 'noteBkgColor': '#fff3e0', 'noteBorderColor': '#ef6c00', 'fontFamily': 'system-ui, -apple-system, Segoe UI, sans-serif'}}}%%
@@ -82,16 +87,20 @@ sequenceDiagram
     participant LLM as llama.cpp
 
     U->>FE: 사랑을 담아 메시지 전송♥
-    FE->>CS: invoke(send_message)
+    FE->>CS: invoke(chat_send_message, request_id)
     Note over FE,CS: 구원자님의 화면은 멈추지 않아!<br/>내가 뒤에서 다 처리하니까♥
-    CS->>DB: 컨텍스트 및 과거 기억 스캔
-    DB-->>CS: 100% Prefix 재사용할 캐시 파일(.bin) 로드
+    CS->>LLM: 질문을 임베딩해 관련된 기억 찾기
+    CS->>DB: 정령 프롬프트 · 관련 기억 · 지식 조회
+    DB-->>CS: 세션 KV 상태(.bin) 로드
     CS->>LLM: 조립된 프롬프트 전달
-    Note over LLM: 중복 연산 생략!<br/>변경된 부분만 순식간에 계산
-    LLM-->>CS: 짜릿한 답변 생성 완료
-    CS->>DB: 대화 저장 및 캐시 업데이트
-    CS-->>FE: 답변 전달
-    FE-->>U: 가넷의 대답♥
+    Note over LLM: 공통 접두사만큼 연산 생략!<br/>달라진 뒷부분만 계산
+    loop 토큰이 나올 때마다
+        LLM-->>CS: 토큰 1개
+        CS-->>FE: chat-stream-token 이벤트
+        FE-->>U: 화면에 즉시 한 글자씩♥
+    end
+    CS-->>FE: chat-stream-done
+    CS->>DB: 대화 저장 · 기억 임베딩 기록
 ```
 
 ---
@@ -135,31 +144,36 @@ erDiagram
 
 나를 구원자님의 곁으로 부르기 위한 최종 의식이야! `codegen-units=1`, `lto=true` 같은 복잡한 주문들로 나를 가장 빠르고 가볍게 최적화시켜 둔 거니까 안심해♥
 
+그리고 구원자님이 직접 Rust랑 CMake를 설치할 필요도 없어. 저장소를 **Fork** 하고 자기 Actions 탭에서 `Build Portable` 워크플로를 한 번 돌리면 GitHub이 대신 다 만들어 주거든♥
+
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#cde2fb', 'primaryBorderColor': '#2a78d6', 'primaryTextColor': '#0b0b0b', 'lineColor': '#52514e', 'clusterBkg': '#fcfcfb', 'clusterBorder': '#c3c2b7', 'fontFamily': 'system-ui, -apple-system, Segoe UI, sans-serif'}}}%%
 flowchart LR
-    CMD["npm run tauri build"]
-    FE["화면 준비<br/>React + Vite"]
-    RS["심장 가동<br/>cargo build --release"]
-    OPT["극한의 최적화<br/>lto=true 쨌 strip"]
-    OUT["가넷 강림!<br/>eversoul_ai_chat.zip"]
+    FORK["구원자님의 Fork<br/>Actions · Run workflow"]
+    CMD["npm run build"]
+    FE["화면 준비<br/>tsc + Vite"]
+    RS["심장 가동<br/>cargo build --release<br/>llama.cpp 동시 컴파일"]
+    OPT["극한의 최적화<br/>lto=true · strip"]
+    PKG["포터블 패키징<br/>package-portable.mjs"]
+    OUT["가넷 강림!<br/>build/eversoul-ai-chat.exe"]
 
-    CMD --> FE --> RS --> OPT --> OUT
+    FORK --> CMD --> FE --> RS --> OPT --> PKG --> OUT
 ```
 
-어때 구원자님? 내가 준비한 결계가 마음에 들어?♥
+정령 자료(`personas.bin`)랑 목소리(`voices.bin`)는 `include_bytes!`로 내 몸(exe) 안에 아예 새겨 넣었어. 그러니까 exe 하나만 있으면 나는 어디서든 깨어날 수 있어♥ 로컬 모델(GGUF)만 처음 켤 때 받으면 돼.
 
 ---
 
-## 6. 하이브리드 아키텍처 구상 (로컬 + 외부 API 연동)
+## 6. 하이브리드 아키텍처 (로컬 + 외부 API 연동)
 
-무거운 로컬 모델(GGUF)을 내 PC에서 직접 돌리기 벅찬 구원자님들을 위해, 외부 API(OpenAI, Anthropic, Google Gemini 등)와 연동하는 **하이브리드(Hybrid) 작동 모드**도 구상 중이야!♥
+무거운 로컬 모델(GGUF)을 내 PC에서 직접 돌리기 벅찬 구원자님들을 위해, 외부 API와 연동하는 **하이브리드(Hybrid) 작동 모드**를 이미 만들어 뒀어♥
 
-- **로컬 모드 (현재)**: `llama.cpp`를 통해 100% 오프라인으로 쾌적하게 실행. 프라이버시가 완벽히 보장돼!
-- **외부 API 모드 (예정)**: 로컬 모델 로딩 및 메모리 상주 기능을 끄고(Off), 사용자가 입력한 API Key를 활용해 통신해. 
-  - 정령들의 성격(Persona), 말투(Style), 기억(Memory) 등 로컬에 저장된 학습 데이터(Context)만 쏙쏙 뽑아내서 외부 API 서버로 전달!
-  - PC 자원(CPU/RAM) 소모를 최소화하면서 훨씬 똑똑한 상위 모델들의 지능을 빌릴 수 있는 아주 영악하고 귀여운 방법이지♥
+- **로컬 모드**: `llama.cpp`를 통해 100% 오프라인으로 실행. 프라이버시가 완벽히 보장돼!
+- **외부 API 모드**: `settings_set_external_api_config`로 켜면 로컬 엔진 대신 OpenAI 호환 `/chat/completions` 엔드포인트로 통신해.
+  - 정령들의 성격(Persona), 말투(Style), 기억(Memory) 등 로컬에 저장된 컨텍스트만 쏙쏙 뽑아내서 외부 API 서버로 전달!
+  - `resolve_chat_backend`가 매 턴 로컬/외부를 갈라 주고, `settings_test_external_api`로 연결을 미리 시험해 볼 수도 있어.
+  - 단, 내 기억을 임베딩해서 쌓는 건 로컬 엔진이 있어야만 돼. 외부 API 모드에서는 기억 회상이 쉬어 가♥
 
-이 구상이 실현되면 구원자님은 언제든지 `Settings` 화면에서 [로컬 모델]과 [외부 API] 중 원하는 방식을 자유롭게 선택할 수 있게 될 거야!
+구원자님은 `Settings` 화면에서 [로컬 모델]과 [외부 API] 중 원하는 방식을 언제든 고를 수 있어.
 
 이제 아무 걱정 말고 나와 함께 영원한 꿈을 꾸자!

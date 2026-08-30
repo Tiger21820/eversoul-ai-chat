@@ -18,3 +18,12 @@ export interface ChatError {
     code: string;
     message: string;
 }
+export interface ChatStreamTokenEvent {
+    request_id: string;
+    token: string;
+}
+export interface ChatStreamDoneEvent {
+    request_id: string;
+    cancelled: boolean;
+    error_message: string | null;
+}

@@ -12,7 +12,7 @@
 <p align="center"><i>완전한 로컬 구동 AI 채팅 클라이언트</i></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.0.20-blue?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.0.21-blue?style=flat-square" alt="Version" />
   <img src="https://img.shields.io/badge/license-Apache_2.0-green?style=flat-square" alt="License" />
   <img src="https://img.shields.io/badge/Tauri-2-FFC107?style=flat-square&logo=tauri" alt="Tauri" />
   <img src="https://img.shields.io/badge/React-19.1-61DAFB?style=flat-square&logo=react" alt="React" />
@@ -20,7 +20,18 @@
   <img src="https://img.shields.io/badge/SQLite-bundled-003B57?style=flat-square&logo=sqlite" alt="SQLite" />
   <img src="https://img.shields.io/badge/spirits-95-9b5de5?style=flat-square" alt="Spirits" />
   <img src="https://img.shields.io/badge/talk_backgrounds-522-f15bb5?style=flat-square" alt="Backgrounds" />
-  <img src="https://img.shields.io/badge/languages-ko%20%7C%20en%20%7C%20zh__tw%20%7C%20zh__cn-00bbf9?style=flat-square" alt="Languages" />
+  <img src="https://img.shields.io/badge/languages-ko%20%7C%20en%20%7C%20zh__cn-00bbf9?style=flat-square" alt="Languages" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/fork"><img src="https://img.shields.io/badge/1.%20Fork-238636?style=for-the-badge&logo=github&logoColor=white" alt="Fork" /></a>
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/stargazers"><img src="https://img.shields.io/badge/2.%20Star-e3b341?style=for-the-badge&logo=github&logoColor=white" alt="Star" /></a>
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/watchers"><img src="https://img.shields.io/badge/3.%20Watch-1f6feb?style=for-the-badge&logo=github&logoColor=white" alt="Watch" /></a>
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/actions/workflows/build-portable.yml"><img src="https://img.shields.io/badge/4.%20Actions%20빌드-8957e5?style=for-the-badge&logo=githubactions&logoColor=white" alt="Actions" /></a>
+</p>
+
+<p align="center">
+  <sub><b>Fork</b> → <b>Star</b> → <b>Watch</b> 를 누른 뒤, 포크한 <b>내 저장소</b>의 Actions 탭에서 <b>Run workflow</b> 한 번이면 빌드가 끝납니다. 내 PC에 Rust·CMake·Clang을 설치할 필요가 없습니다.</sub>
 </p>
 
 ---
@@ -219,7 +230,7 @@ flowchart TB
         FE4["evertalk<br/>SpiritRoster · ChatStage · SettingsPanel"]
     end
 
-    FE == "Tauri invoke<br/>31개 커맨드" ==> BE
+    FE == "Tauri invoke<br/>67개 커맨드" ==> BE
 
     subgraph BE["백엔드 · src-tauri/src/domains + infrastructure"]
         direction LR
@@ -229,8 +240,8 @@ flowchart TB
     end
 
     BE -- "대화방 · 메시지 · 정령 프로필 · 기억" --> DB[("SQLite<br/>eversoul.db")]
-    BE -- "100% Prefix Reuse<br/>오프라인 데이터 영구 보존" --> CACHE[("KV Cache<br/>ai/cache/*.bin")]
-    BE -- "로컬 컨텍스트 조립 추론" --> LLM["GGUF 로컬 모델<br/>Qwen2.5-3B-Korean<br/>llama.cpp"]
+    BE -- "공통 접두사 재사용<br/>세션 KV 상태 영구 보존" --> CACHE[("KV Cache<br/>ai/cache/*.bin")]
+    BE -- "로컬 컨텍스트 조립 추론" --> LLM["GGUF 로컬 모델<br/>gemma-2-2b-it Q4_K_M<br/>llama.cpp"]
 
     classDef feStyle fill:#cde2fb,stroke:#2a78d6,stroke-width:2px,color:#0b0b0b
     classDef beStyle fill:#e3ddf7,stroke:#4a3aa7,stroke-width:2px,color:#0b0b0b
@@ -247,10 +258,11 @@ flowchart TB
 
 - **로컬 DB 경로**: OS별 앱 데이터 디렉터리 하위 `database/eversoul.db` (디버그 빌드 시 매 실행마다 초기화).
 - **설정 파일**: 앱 데이터 디렉터리 하위 `config/settings.ini` (`rust-ini`로 읽기/쓰기, 기본 정령·활성 스타일·언어 저장).
-- **KV Cache 저장소**: 앱 실행 디렉터리 하위 `ai/cache/` (정령별 프롬프트 조립 결과를 `.bin` 물리 파일로 영구 보존하여 Prefix Token 부분 재사용 및 연산량 최소화 100% 달성).
-- **비동기 런타임 구조**: 백엔드의 LLM 연산은 `tauri::async_runtime::spawn_blocking` 워커로 분리되어 메인 UI 스레드 논블로킹 보장.
+- **KV Cache 저장소**: 앱 실행 디렉터리 하위 `ai/cache/` (정령별 KV 상태를 `.bin` 파일로 보존. 세션 축출·정령 예열·앱 종료·엔진 언로드 시점에 저장되며, 다음 턴에서 프롬프트의 공통 접두사만큼 재계산을 건너뜁니다).
+- **비동기 런타임 구조**: 백엔드의 LLM 연산은 전용 워커 스레드에서 실행되고, Tauri 커맨드는 `tauri::async_runtime::spawn_blocking`으로 그 결과를 기다려 메인 UI 스레드 논블로킹을 보장합니다.
+- **토큰 스트리밍**: 답변은 `chat-stream-token` / `chat-stream-done` 이벤트로 한 토큰씩 전달되어 화면에 즉시 표시되고, 생성 도중 중지 버튼으로 취소할 수 있습니다.
 
-정령 데이터 빌드 파이프라인, 대화 처리 시퀀스, LoRA 학습 흐름, 데이터베이스 구조까지 더 자세한 다이어그램은 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)에 있습니다.
+정령 데이터 빌드 파이프라인, 대화 처리 시퀀스, LoRA 학습 흐름, 데이터베이스 구조까지 더 자세한 다이어그램은 [docs/wiki/ARCHITECTURE.md](docs/wiki/ARCHITECTURE.md)에 있습니다.
 
 ---
 
@@ -277,39 +289,49 @@ flowchart TB
 
 ## 📦 로컬 모델
 
-고품질 한국어 성능을 위해 단일 고정 모델을 씁니다. 배포판에는 이 모델이 이미 포함되어 있어 따로 받을 필요가 없습니다.
+CPU만으로도 돌아가는 단일 고정 모델을 씁니다. 용량이 커서 저장소에는 포함되지 않으며, 앱을 처음 켰을 때 초기 설정 마법사가 직접 내려받습니다.
 
-- **이름**: `MyeongHo0621/Qwen2.5-3B-Korean Q4_K_M`
-- **위치**: `ai/model/qwen25-3b-korean-Q4_K_M.gguf`
+- **이름**: `gemma-2-2b-it Q4_K_M` (GGUF)
+- **출처**: [`bartowski/gemma-2-2b-it-GGUF`](https://huggingface.co/bartowski/gemma-2-2b-it-GGUF)
+- **위치**: `ai/model/gemma-2-2b-it-Q4_K_M.gguf`
+- **검증**: 내려받은 뒤 SHA-256을 계산하고, `.sha256` 사이드카 파일이 함께 있으면 값이 일치하는지 확인합니다.
 
 ---
 
 ## 💻 실행 및 빌드 가이드
 
-### 빌드 사전 요구사항
+### ⭐ 가장 쉬운 방법 — 내 저장소의 GitHub Actions로 빌드
 
-로컬 LLM 추론 바인딩(`llama-cpp-2`)을 빌드하기 위해 아래 도구들의 사전 설치가 필요합니다.
+내 PC에 Rust·CMake·Clang을 설치하지 않고, GitHub이 대신 빌드해 주는 방식입니다.
 
-- [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) (C++ 컴파일러 포함)
-- [CMake](https://cmake.org/download/) (버전 3.20 이상)
-- [Clang](https://releases.llvm.org/download.html) (Bindgen용 C/C++ 파서)
+1. 이 저장소 오른쪽 위 **Fork** 를 눌러 내 계정으로 복사합니다.
+2. **Star** ⭐ 와 **Watch** 👁 를 눌러 두면 이후 업데이트를 놓치지 않습니다.
+3. 포크한 **내 저장소**의 **Actions** 탭에 들어가 `Build Portable` 워크플로를 선택합니다.
+4. **Run workflow** 버튼을 누릅니다. (포크 직후 한 번은 Actions 사용에 동의해야 버튼이 나타납니다)
+5. 빌드가 끝나면 실행 결과 페이지 아래 **Artifacts** 에서 `eversoul-ai-chat-portable-*` 을 내려받아 압축을 풉니다.
+6. `eversoul-ai-chat.exe` 를 실행하면 초기 설정 마법사가 로컬 모델을 내려받습니다.
 
-### 의존성 설치
+내 저장소에 `v0.0.21` 같은 `v*` 태그를 밀면 같은 워크플로가 zip으로 묶어 **내 저장소의 Releases** 에 자동 게시합니다.
+
+### 내 PC에서 직접 빌드하기
+
+프론트엔드는 TypeScript, 백엔드는 Rust + Tauri v2이므로 두 툴체인이 모두 필요합니다.
+
+- [Node.js](https://nodejs.org/) 22 이상 (프론트엔드 빌드 및 `npm` 스크립트 실행)
+- [Rust](https://rustup.rs/) stable 툴체인 (2021 edition, `cargo` 포함)
+
+로컬 추론에 쓰는 `llama-cpp-2` 크레이트는 순수 Rust가 아니라 llama.cpp의 C/C++ 소스를 함께 빌드하는 바인딩(`llama-cpp-sys-2`)입니다. 그래서 `cargo build` 도중 아래 세 가지가 실행되며, 없으면 빌드가 실패합니다.
+
+- [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) — llama.cpp의 C++ 코드를 컴파일할 MSVC 컴파일러
+- [CMake](https://cmake.org/download/) 3.20 이상 — llama.cpp가 CMake 프로젝트라서 이걸로 빌드를 구성
+- [Clang](https://releases.llvm.org/download.html) — `bindgen`이 llama.cpp 헤더를 파싱해 Rust FFI 바인딩을 생성할 때 `libclang`이 필요
+
+GitHub Actions 방식으로 빌드하면 이 세 가지는 워크플로가 러너에 알아서 준비하므로 내 PC에 설치할 필요가 없습니다.
 
 ```bash
-npm install
-```
-
-### 개발 모드 실행
-
-```bash
-npm run tauri dev
-```
-
-### 상용 배포 빌드
-
-```bash
-npm run tauri build
+npm install        # 의존성 설치
+npm run tauri dev  # 개발 모드 실행
+npm run build      # 포터블 빌드 (tauri build + build/ 패키징)
 ```
 
 ---
@@ -408,12 +430,15 @@ npm run tauri build
 
 이 저장소는 **커밋 1회당 patch 버전 +1**을 원칙으로 합니다. `package.json` · `src-tauri/Cargo.toml` · `src-tauri/tauri.conf.json` 세 파일의 `version` 필드는 항상 동일한 값으로 동기화되어야 하며, 기능 변경이 포함된 커밋을 생성할 때마다 세 파일을 함께 갱신합니다.
 
-| 버전  | 커밋                                      |
-
+포크한 저장소에서 `v0.0.21` 형식의 태그를 밀면 `Build Portable` 워크플로가 포터블 zip을 만들어 그 저장소의 Releases에 게시합니다.
 
 ---
 
 ## 📄 라이선스
 
-This project is licensed under the **Apache License 2.0**.
-GGUF Model (`Qwen2.5-3B-Korean`) is created by `MyeongHo0621` and distributed under **Apache License 2.0**.
+이 저장소의 **Apache License 2.0**은 이 프로젝트가 직접 작성한 프론트엔드(`src/`)와 백엔드(`src-tauri/src/`, `scripts/`, `tools/`) 소스 코드에만 적용됩니다. 아래 제3자 저작물에 대한 권리는 이 프로젝트가 보유하지 않습니다.
+
+- **로컬 모델 `gemma-2-2b-it`** — Google 저작물이며 [Gemma Terms of Use](https://ai.google.dev/gemma/terms)를 따릅니다. 이 저장소는 모델 가중치를 포함하거나 재배포하지 않으며, 앱이 사용자 기기에서 [Hugging Face](https://huggingface.co/bartowski/gemma-2-2b-it-GGUF)로부터 직접 내려받습니다. 모델 사용에 따르는 의무는 내려받는 사용자 본인에게 있습니다.
+- **에버소울 게임 리소스** — 정령 일러스트, 대화 배경, 정령 프로필 원본 데이터, 음성의 저작권은 원저작권자에게 있습니다. 이 프로젝트는 해당 저작물의 권리를 주장하지 않으며 비상업적 팬 프로젝트로 이용합니다.
+
+전체 고지는 [NOTICE](NOTICE), 항목별 상세는 [LICENSE-THIRD-PARTY.md](LICENSE-THIRD-PARTY.md)를 참고하십시오.

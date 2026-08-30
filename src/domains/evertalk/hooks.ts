@@ -63,8 +63,12 @@ export function useEverTalkController(): EverTalkController {
     const [activeDetail, setActiveDetail] = useState<SpiritDetail | null>(null);
     const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [previousRooms, setPreviousRooms] = useState<ChatRoom[]>([]);
+    const [previousRoomsLoading, setPreviousRoomsLoading] = useState(false);
     const [inputText, setInputText] = useState('');
     const [isTyping, setIsTyping] = useState(false);
+    const [streamingText, setStreamingText] = useState('');
+    const [streamingRequestId, setStreamingRequestId] = useState<string | null>(null);
     const [warmupState, setWarmupState] = useState<WarmupState>({
         isActive: false,
         currentIndex: 0,
@@ -422,8 +426,11 @@ export function useEverTalkController(): EverTalkController {
         }
         const userText = inputText;
         const room = activeRoom;
+        const requestId = crypto.randomUUID();
         setInputText('');
         setIsTyping(true);
+        setStreamingText('');
+        setStreamingRequestId(requestId);
         const optimisticUserMessage: ChatMessage = {
             id: crypto.randomUUID(),
             room_id: room.id,
@@ -433,9 +440,12 @@ export function useEverTalkController(): EverTalkController {
             created_at: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, optimisticUserMessage]);
+        const unlistenToken = await chatClient.onStreamToken(requestId, (token) => {
+            setStreamingText((prev) => prev + token);
+        });
         let aiMessage: ChatMessage | null = null;
         try {
-            aiMessage = await chatClient.sendMessage(room.id, userText, activeSpiritId);
+            aiMessage = await chatClient.sendMessage(room.id, userText, activeSpiritId, requestId);
             setMessages((prev) => [...prev, aiMessage as ChatMessage]);
         }
         catch (err) {
@@ -450,6 +460,11 @@ export function useEverTalkController(): EverTalkController {
                 created_at: new Date().toISOString(),
             };
             setMessages((prev) => [...prev, errorMessage]);
+        }
+        finally {
+            unlistenToken();
+            setStreamingText('');
+            setStreamingRequestId(null);
         }
         if (aiMessage) {
             try {
@@ -467,6 +482,85 @@ export function useEverTalkController(): EverTalkController {
             }
         }
         setIsTyping(false);
+    }
+    async function cancelStreaming() {
+        if (!streamingRequestId) {
+            return;
+        }
+        try {
+            await llmClient.cancelRequest(streamingRequestId);
+        }
+        catch (err) {
+            console.error(labels.logChatResponseFailed, err);
+        }
+    }
+    async function startNewChat() {
+        if (!activeSpiritId) {
+            return;
+        }
+        try {
+            const room = await chatClient.startNewRoom(activeSpiritId);
+            setActiveRoom(room);
+            setMessages([]);
+            await refreshActiveSessions();
+        }
+        catch (err) {
+            console.error(labels.logRoomSwitchCacheFailed, err);
+            setSystemStatus(createApiStatus('llm', labels.localModel, 'error', formatUnknownError(err)));
+        }
+    }
+    async function loadPreviousRooms() {
+        if (!activeSpiritId) {
+            return;
+        }
+        setPreviousRoomsLoading(true);
+        try {
+            const rooms = await chatClient.listRoomsForPersona(activeSpiritId);
+            setPreviousRooms(rooms);
+        }
+        catch (err) {
+            console.error(labels.logRoomSwitchCacheFailed, err);
+        }
+        finally {
+            setPreviousRoomsLoading(false);
+        }
+    }
+    async function switchToRoom(room: ChatRoom) {
+        if (!activeSpiritId || room.id === activeRoom?.id) {
+            return;
+        }
+        try {
+            const history = await chatClient.listMessagesForPersona(room.id, activeSpiritId);
+            setActiveRoom(room);
+            setMessages(history);
+        }
+        catch (err) {
+            console.error(labels.logRoomSwitchCacheFailed, err);
+            setSystemStatus(createApiStatus('llm', labels.localModel, 'error', formatUnknownError(err)));
+        }
+    }
+    async function deleteChatMessage(messageId: string) {
+        try {
+            await chatClient.deleteMessage(messageId);
+            setMessages((prev) => prev.filter((message) => message.id !== messageId));
+        }
+        catch (err) {
+            console.error(labels.logRoomSwitchCacheFailed, err);
+            setSystemStatus(createApiStatus('llm', labels.localModel, 'error', formatUnknownError(err)));
+        }
+    }
+    async function deleteChatRoom(roomId: string) {
+        try {
+            await chatClient.deleteRoom(roomId);
+            setPreviousRooms((prev) => prev.filter((room) => room.id !== roomId));
+            if (activeRoom?.id === roomId) {
+                await startNewChat();
+            }
+        }
+        catch (err) {
+            console.error(labels.logRoomSwitchCacheFailed, err);
+            setSystemStatus(createApiStatus('llm', labels.localModel, 'error', formatUnknownError(err)));
+        }
     }
     async function syncStyles() {
         setIsSyncing(true);
@@ -950,8 +1044,18 @@ export function useEverTalkController(): EverTalkController {
         activeDetail,
         activeRoom,
         messages,
+        previousRooms,
+        previousRoomsLoading,
+        startNewChat,
+        loadPreviousRooms,
+        switchToRoom,
+        deleteChatMessage,
+        deleteChatRoom,
         inputText,
         isTyping,
+        streamingText,
+        streamingRequestId,
+        cancelStreaming,
         styles,
         activeStyle,
         isSyncing,

@@ -12,7 +12,7 @@
 <p align="center"><i>承载精灵之声的完全本地化 AI 聊天客户端</i></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.0.20-blue?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.0.21-blue?style=flat-square" alt="Version" />
   <img src="https://img.shields.io/badge/license-Apache_2.0-green?style=flat-square" alt="License" />
   <img src="https://img.shields.io/badge/Tauri-2-FFC107?style=flat-square&logo=tauri" alt="Tauri" />
   <img src="https://img.shields.io/badge/React-19.1-61DAFB?style=flat-square&logo=react" alt="React" />
@@ -20,7 +20,18 @@
   <img src="https://img.shields.io/badge/SQLite-bundled-003B57?style=flat-square&logo=sqlite" alt="SQLite" />
   <img src="https://img.shields.io/badge/spirits-95-9b5de5?style=flat-square" alt="Spirits" />
   <img src="https://img.shields.io/badge/talk_backgrounds-522-f15bb5?style=flat-square" alt="Backgrounds" />
-  <img src="https://img.shields.io/badge/languages-ko%20%7C%20en%20%7C%20zh__tw%20%7C%20zh__cn-00bbf9?style=flat-square" alt="Languages" />
+  <img src="https://img.shields.io/badge/languages-ko%20%7C%20en%20%7C%20zh__cn-00bbf9?style=flat-square" alt="Languages" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/fork"><img src="https://img.shields.io/badge/1.%20Fork-238636?style=for-the-badge&logo=github&logoColor=white" alt="Fork" /></a>
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/stargazers"><img src="https://img.shields.io/badge/2.%20Star-e3b341?style=for-the-badge&logo=github&logoColor=white" alt="Star" /></a>
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/watchers"><img src="https://img.shields.io/badge/3.%20Watch-1f6feb?style=for-the-badge&logo=github&logoColor=white" alt="Watch" /></a>
+  <a href="https://github.com/GarnetRapture/eversoul-ai-chat/actions/workflows/build-portable.yml"><img src="https://img.shields.io/badge/4.%20Actions%20构建-8957e5?style=for-the-badge&logo=githubactions&logoColor=white" alt="Actions" /></a>
+</p>
+
+<p align="center">
+  <sub>点击 <b>Fork</b> → <b>Star</b> → <b>Watch</b>，然后在 <b>自己 Fork</b> 的 Actions 标签页点一次 <b>Run workflow</b> 即可完成构建。本机无需安装 Node.js、Rust、CMake 或 Clang。</sub>
 </p>
 
 ---
@@ -219,7 +230,7 @@ flowchart TB
         FE4["evertalk<br/>SpiritRoster · ChatStage · SettingsPanel"]
     end
 
-    FE == "Tauri invoke<br/>31 个命令" ==> BE
+    FE == "Tauri invoke<br/>67 个命令" ==> BE
 
     subgraph BE["后端 · src-tauri/src/domains + infrastructure"]
         direction LR
@@ -229,8 +240,8 @@ flowchart TB
     end
 
     BE -- "聊天室 · 消息 · 精灵资料 · 记忆" --> DB[("SQLite<br/>eversoul.db")]
-    BE -- "100% Prefix Reuse<br/>离线数据持久化保存" --> CACHE[("KV Cache<br/>ai/cache/*.bin")]
-    BE -- "本地上下文组装推理" --> LLM["本地 GGUF 模型<br/>Qwen2.5-3B-Korean<br/>llama.cpp"]
+    BE -- "共同前缀复用<br/>会话 KV 状态持久化保存" --> CACHE[("KV Cache<br/>ai/cache/*.bin")]
+    BE -- "本地上下文组装推理" --> LLM["本地 GGUF 模型<br/>gemma-2-2b-it Q4_K_M<br/>llama.cpp"]
 
     classDef feStyle fill:#cde2fb,stroke:#2a78d6,stroke-width:2px,color:#0b0b0b
     classDef beStyle fill:#e3ddf7,stroke:#4a3aa7,stroke-width:2px,color:#0b0b0b
@@ -247,10 +258,11 @@ flowchart TB
 
 - **本地数据库路径**：操作系统应用数据目录下的 `database/eversoul.db`（调试构建下每次启动都会重置）。
 - **配置文件**：应用数据目录下的 `config/settings.ini`（通过 `rust-ini` 读写，保存默认精灵、当前风格与语言设置）。
-- **KV Cache 存储**：应用运行目录下的 `ai/cache/`（将各精灵的 Prompt 组装结果作为物理 `.bin` 文件永久保存，以实现 100% Prefix Token 复用及计算量最小化）。
-- **异步运行时架构**：后端的 LLM 计算独立在 `tauri::async_runtime::spawn_blocking` 工作线程中执行，确保主 UI 线程非阻塞。
+- **KV Cache 存储**：应用运行目录下的 `ai/cache/`（各精灵的 KV 状态以 `.bin` 文件保存，在会话淘汰、精灵预热、应用退出、引擎卸载时写入；下一轮对话可跳过与提示词共同前缀部分的重新计算）。
+- **异步运行时架构**：LLM 计算在专用工作线程中执行，Tauri 命令通过 `tauri::async_runtime::spawn_blocking` 等待其结果，确保主 UI 线程非阻塞。
+- **词元流式输出**：回复通过 `chat-stream-token` / `chat-stream-done` 事件逐词元送达并即时显示，生成过程中可用停止按钮取消。
 
-精灵数据构建流程、对话处理时序、LoRA 训练流程、数据库结构等更详细的图示，见 [docs/ARCHITECTURE.zh-CN.md](docs/ARCHITECTURE.zh-CN.md)。
+精灵数据构建流程、对话处理时序、LoRA 训练流程、数据库结构等更详细的图示，见 [docs/wiki/ARCHITECTURE.zh-CN.md](docs/wiki/ARCHITECTURE.zh-CN.md)。
 
 ---
 
@@ -275,34 +287,47 @@ flowchart TB
 
 ## 📦 本地模型
 
-为保证高质量的韩语性能，采用单一固定模型。发行版中已经包含该模型，无需另行下载。
+仅靠 CPU 即可运行的单一固定模型。由于体积较大未包含在仓库中，首次启动时由初始设置向导自动下载。
 
-- **名称**：`MyeongHo0621/Qwen2.5-3B-Korean Q4_K_M`
-- **存放位置**：`ai/model/qwen25-3b-korean-Q4_K_M.gguf`
+- **名称**：`gemma-2-2b-it Q4_K_M`（GGUF）
+- **来源**：[`bartowski/gemma-2-2b-it-GGUF`](https://huggingface.co/bartowski/gemma-2-2b-it-GGUF)
+- **存放位置**：`ai/model/gemma-2-2b-it-Q4_K_M.gguf`
+- **校验**：下载后计算 SHA-256，若同时存在 `.sha256` 附属文件则校验其值是否一致。
 
 ---
 
 ## 💻 运行与构建指南
 
-### 构建前置条件
-为构建本地 LLM 推理绑定（`llama-cpp-2`），需要预先安装以下工具。
-- [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/)（含 C++ 编译器）
-- [CMake](https://cmake.org/download/)（3.20 版本以上）
-- [Clang](https://releases.llvm.org/download.html)（Bindgen 用 C/C++ 解析器）
+### ⭐ 最简单的方式 — 在自己 Fork 的 GitHub Actions 中构建
 
-### 安装依赖
-```bash
-npm install
-```
+由 GitHub 代为构建，本机无需安装 Node.js、Rust、CMake 或 Clang。
 
-### 开发模式运行
-```bash
-npm run tauri dev
-```
+1. 点击本仓库右上角的 **Fork**，复制到自己的账号下。
+2. 点击 **Star** ⭐ 与 **Watch** 👁，以免错过后续更新。
+3. 进入 **自己 Fork** 的 **Actions** 标签页，选择 `Build Portable` 工作流。
+4. 点击 **Run workflow**。（刚 Fork 后需先启用一次 Actions，按钮才会出现）
+5. 构建完成后，在运行结果页面底部的 **Artifacts** 中下载 `eversoul-ai-chat-portable-*` 并解压。
+6. 运行 `eversoul-ai-chat.exe`，初始设置向导会自动下载本地模型。
 
-### 生产环境构建
+向自己的 Fork 推送 `v0.0.21` 这样的 `v*` 标签，同一个工作流会打包成 zip 并自动发布到 **自己 Fork 的 Releases**。
+
+### 在本机直接构建
+
+前端为 TypeScript，后端为 Rust + Tauri v2，因此两套工具链都必须具备。
+
+- [Node.js](https://nodejs.org/) 22 以上（前端构建与 `npm` 脚本执行）
+- [Rust](https://rustup.rs/) stable 工具链（2021 edition，含 `cargo`）
+
+此外，本地推理使用的 `llama-cpp-2` 并非纯 Rust，而是会一并编译 llama.cpp C/C++ 源码的绑定（`llama-cpp-sys-2`）。因此 `cargo build` 过程中会调用以下三者，缺少任意一项都会导致构建失败。
+
+- [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) — 编译 llama.cpp C++ 代码的 MSVC 编译器
+- [CMake](https://cmake.org/download/) 3.20 以上 — llama.cpp 是 CMake 项目，需要它来配置构建
+- [Clang](https://releases.llvm.org/download.html) — `bindgen` 解析 llama.cpp 头文件生成 Rust FFI 绑定时需要 `libclang`
+
 ```bash
-npm run tauri build
+npm install        # 安装依赖
+npm run tauri dev  # 开发模式运行
+npm run build      # 便携版构建（tauri build + build/ 打包）
 ```
 
 ---
@@ -400,10 +425,15 @@ npm run tauri build
 | 0.0.19 | `ㅇ` |
 | 0.0.20 | `버그수정` |
 | 0.0.20 | `도메인 컨트롤러 분리 및 다국어 에러 통일, 프론트-백엔드 정합화` |
+| 0.0.21 | `Fix local inference correctness, wire streaming chat, add fork-and-build CI` |
 
 ---
 
 ## 📄 许可证
 
-This project is licensed under the **Apache License 2.0**.
-GGUF Model (`Qwen2.5-3B-Korean`) is created by `MyeongHo0621` and distributed under **Apache License 2.0**.
+本仓库的 **Apache License 2.0** 仅适用于本项目自行编写的前端（`src/`）与后端（`src-tauri/src/`、`scripts/`、`tools/`）源代码。本项目不拥有以下第三方作品的任何权利。
+
+- **本地模型 `gemma-2-2b-it`** — 属于 Google 的作品，受 [Gemma Terms of Use](https://ai.google.dev/gemma/terms) 约束。本仓库既不包含也不再分发模型权重，应用会在用户本机从 [Hugging Face](https://huggingface.co/bartowski/gemma-2-2b-it-GGUF) 直接下载。使用该模型所产生的义务由下载者本人承担。
+- **《EverSoul》游戏资源** — 精灵立绘、对话背景、精灵资料原始数据与语音的著作权归原权利人所有。本项目不主张对这些作品的任何权利，仅作为非商业同人项目使用。
+
+完整声明见 [NOTICE](NOTICE)，逐项明细见 [LICENSE-THIRD-PARTY.md](LICENSE-THIRD-PARTY.md)。

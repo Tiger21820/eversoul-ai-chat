@@ -13,9 +13,10 @@ use crate::infrastructure::database::DatabaseManager;
 
 use crate::domains::auth::commands::{auth_get_session, auth_login, auth_logout};
 use crate::domains::chat::commands::{
-    chat_create_room, chat_create_session_room, chat_get_evertalk_session_room,
-    chat_get_latest_session_room, chat_list_messages, chat_list_messages_for_persona,
-    chat_list_rooms, chat_prepare_persona_cache, chat_send_message,
+    chat_create_room, chat_create_session_room, chat_delete_message, chat_delete_room,
+    chat_get_evertalk_session_room, chat_get_latest_session_room, chat_list_messages,
+    chat_list_messages_for_persona, chat_list_rooms, chat_list_rooms_for_persona,
+    chat_prepare_persona_cache, chat_send_message, chat_start_new_room,
 };
 use crate::domains::knowledge::commands::knowledge_search;
 use crate::domains::llm::commands::{
@@ -173,6 +174,10 @@ pub fn run() {
             chat_list_messages_for_persona,
             chat_prepare_persona_cache,
             chat_send_message,
+            chat_list_rooms_for_persona,
+            chat_start_new_room,
+            chat_delete_room,
+            chat_delete_message,
             llm_load,
             llm_download_model,
             llm_unload,
@@ -224,9 +229,18 @@ pub fn run() {
 
     startup_debug_log("tauri:build:after");
     startup_debug_log("tauri:run:before");
-    app.run(|_app_handle, event| {
+    app.run(|app_handle, event| {
         if !matches!(event, tauri::RunEvent::MainEventsCleared) {
             startup_debug_log(&format!("tauri:event:{event:?}"));
+        }
+
+        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+            if let Ok(engine_lock) = app_handle.state::<LlmState>().inner().0.lock() {
+                if let Some(ref handle) = *engine_lock {
+                    let persisted = handle.persist_sessions();
+                    startup_debug_log(&format!("tauri:exit:sessions_persisted:{persisted}"));
+                }
+            }
         }
     });
     startup_debug_log("tauri:run:returned");

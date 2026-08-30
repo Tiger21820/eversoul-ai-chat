@@ -1,10 +1,10 @@
 use super::types::LlmInferResponse;
 use crate::infrastructure::cache::CacheController;
 use crate::infrastructure::hardware::InferenceProfile;
+use crate::infrastructure::llm::get_model_relative_path;
 use crate::infrastructure::llm::validation::{validate_model_file, ModelFileValidation};
 use crate::infrastructure::llm::worker::LlmWorkerHandle;
 use crate::infrastructure::llm::LlmError as InfraLlmError;
-use crate::infrastructure::llm::get_model_relative_path;
 use crate::startup_debug_log;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,16 +39,7 @@ impl LlmService {
         candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
         candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."));
 
-        let mut unique = Vec::new();
-        for candidate in candidates {
-            let normalized = candidate
-                .canonicalize()
-                .unwrap_or_else(|_| candidate.clone());
-            if !unique.contains(&normalized) {
-                unique.push(normalized);
-            }
-        }
-        unique
+        candidates
     }
 
     pub fn model_destination_path(app_root: &Path, active_model: &str) -> PathBuf {
