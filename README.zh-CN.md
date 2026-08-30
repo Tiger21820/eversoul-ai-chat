@@ -12,7 +12,7 @@
 <p align="center"><i>承载精灵之声的完全本地化 AI 聊天客户端</i></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.0.21-blue?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.0.22-blue?style=flat-square" alt="Version" />
   <img src="https://img.shields.io/badge/license-Apache_2.0-green?style=flat-square" alt="License" />
   <img src="https://img.shields.io/badge/Tauri-2-FFC107?style=flat-square&logo=tauri" alt="Tauri" />
   <img src="https://img.shields.io/badge/React-19.1-61DAFB?style=flat-square&logo=react" alt="React" />
@@ -426,6 +426,7 @@ npm run build      # 便携版构建（tauri build + build/ 打包）
 | 0.0.20 | `버그수정` |
 | 0.0.20 | `도메인 컨트롤러 분리 및 다국어 에러 통일, 프론트-백엔드 정합화` |
 | 0.0.21 | `Fix local inference correctness, wire streaming chat, add fork-and-build CI` |
+| 0.0.22 | `Untrack local runtime config` |
 
 ---
 

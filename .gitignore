@@ -25,6 +25,7 @@ lerna-debug.log*
 .env
 .env.*
 !.env.example
+src-tauri/config/
 
 # 로컬 캐시
 .vite/
