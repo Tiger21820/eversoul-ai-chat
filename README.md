@@ -7,7 +7,7 @@
 <p align="center">
   <img src="public/eversoul-assets/backgrounds/talk/Talk_BG_Castle_Aurelia.png" width="960" alt="EverSoul AI Chat Banner" />
 </p>
-xc
+
 <h1 align="center">EverSoul AI Chat</h1>
 <p align="center"><i>완전한 로컬 구동 AI 채팅 클라이언트</i></p>
 
